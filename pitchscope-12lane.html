@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>PitchScope 12-Lane</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%;
+  background: #000; color: #ccc;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+  overflow: hidden; touch-action: none;
+}
+#app { display: flex; flex-direction: column; height: 100%; }
+#controls {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; background: #111; border-bottom: 1px solid #222; flex-shrink: 0;
+  flex-wrap: wrap;
+}
+#controls button {
+  background: #222; color: #ccc; border: 1px solid #444; border-radius: 5px;
+  padding: 6px 12px; font-size: 13px; cursor: pointer; touch-action: manipulation;
+}
+#controls button:active { background: #333; }
+#controls button:disabled { opacity: 0.4; cursor: default; }
+#controls button.active { background: #3a3; border-color: #5a5; color: #fff; }
+#status { margin-left: auto; font-size: 11px; color: #555; white-space: nowrap; }
+.ctrl-group { display: flex; align-items: center; gap: 4px; }
+.ctrl-group label { font-size: 10px; color: #555; white-space: nowrap; }
+.ctrl-group input[type=range] {
+  width: 60px; height: 14px; accent-color: #3a3;
+  -webkit-appearance: none; appearance: none;
+  background: #444; border-radius: 3px; outline: none; cursor: pointer;
+}
+.ctrl-group input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #4d4; border: 2px solid #6f6; cursor: pointer;
+}
+.ctrl-group input[type=range]::-moz-range-track { background: #444; height: 6px; border-radius: 3px; }
+.ctrl-group input[type=range]::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #4d4; border: 2px solid #6f6; cursor: pointer;
+}
+.ctrl-group .val { font-size: 10px; color: #666; min-width: 24px; text-align: center; }
+.ctrl-group select {
+  background: #222; color: #ccc; border: 1px solid #444; border-radius: 4px;
+  padding: 3px 4px; font-size: 11px; cursor: pointer;
+}
+.ctrl-group input[type=number] { width: 50px; background:#222; color:#ccc; border:1px solid #444; border-radius:4px; padding:2px 4px; font-size:11px; }
+#canvas-wrap { flex: 1; position: relative; min-height: 0; }
+#canvas { width: 100%; height: 100%; display: block; background: #000; }
+#info {
+  position: absolute; bottom: 6px; right: 10px; font-size: 12px;
+  color: #555; text-align: right; pointer-events: none;
+  font-family: monospace;
+}
+/* Gear button */
+#btnSettings {
+  background: none; border: none; color: #555; font-size: 16px;
+  cursor: pointer; padding: 2px 4px; line-height: 1;
+}
+#btnSettings:hover { color: #aaa; }
+/* Settings panel */
+#settingsPanel {
+  width: 100%; background: #1a1a1a; border-bottom: 1px solid #333;
+  padding: 8px 12px; display: none; flex-wrap: wrap; gap: 10px;
+  flex-shrink: 0;
+}
+#settingsPanel.visible { display: flex; }
+.settings-row {
+  display: flex; align-items: center; gap: 6px;
+}
+.settings-row label {
+  font-size: 10px; color: #777; white-space: nowrap;
+}
+.settings-row input[type=number] {
+  width: 50px; background: #222; color: #ccc; border: 1px solid #444;
+  border-radius: 4px; padding: 2px 6px; font-size: 11px;
+}
+.settings-row select {
+  background: #222; color: #ccc; border: 1px solid #444;
+  border-radius: 4px; padding: 3px 6px; font-size: 11px; cursor: pointer;
+}
+.settings-row .hint {
+  font-size: 10px; color: #555;
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="controls">
+    <button id="btnToggle">▶ Start</button>
+    <button id="btnReset">↺ Reset</button>
+    <div class="ctrl-group">
+      <label>Sensitivity</label>
+      <input type="range" id="sensitivity" min="-90" max="-20" value="-70" step="1">
+      <span class="val" id="gateVal">-70</span>
+    </div>
+    <div class="ctrl-group">
+      <label>Speed</label>
+      <input type="range" id="speed" min="30" max="500" value="80" step="10">
+      <span class="val" id="speedVal">80</span>
+    </div>
+    <div class="ctrl-group">
+      <label>Bright</label>
+      <input type="range" id="brightness" min="0.2" max="5.0" value="3.0" step="0.1">
+      <span class="val" id="brightVal">3.0</span>
+    </div>
+    <button id="btnSettings" title="Settings">⚙</button>
+    <div class="ctrl-group" id="scrubGroup" style="display:none">
+      <label>⏪</label>
+      <input type="range" id="scrubber" min="0" max="0" value="0" style="width:120px">
+      <span class="val" id="scrubTime" style="min-width:48px">0:00</span>
+    </div>
+    <button id="btnZoomOut" title="Zoom out" style="display:none;font-size:11px">⊟</button>
+    <span class="val" id="zoomDisplay" style="display:none;min-width:24px">1×</span>
+    <button id="btnZoomIn" title="Zoom in" style="display:none;font-size:11px">⊞</button>
+    <button id="btnLoad" style="font-size:11px">📂 Load</button>
+    <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
+    <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
+    <span id="status">Ready</span>
+  </div>
+  <div id="settingsPanel">
+    <div class="settings-row">
+      <label>Reference A</label>
+      <input type="number" id="refA" value="440" min="430" max="450" step="1">
+      <span class="hint">Hz</span>
+    </div>
+    <div class="settings-row">
+      <label>Transpose</label>
+      <select id="transpose">
+        <option value="0">Concert</option>
+        <option value="2">Bb</option>
+        <option value="9">Eb</option>
+      </select>
+    </div>
+    <div class="settings-row">
+      <label>Line Width</label>
+      <select id="lineWidth">
+        <option value="1">1 px</option>
+        <option value="2">2 px</option>
+        <option value="3">3 px</option>
+        <option value="4">4 px</option>
+      </select>
+    </div>
+    <div class="settings-row">
+      <label>In-Tune ±</label>
+      <select id="inTuneTol">
+        <option value="0">0 cents</option>
+        <option value="1">1 cent</option>
+        <option value="2" selected>2 cents</option>
+        <option value="3">3 cents</option>
+        <option value="5">5 cents</option>
+        <option value="10">10 cents</option>
+      </select>
+    </div>
+    <div class="settings-row">
+      <label>Sens. Min</label>
+      <input type="number" id="sensMin" value="-90" min="-120" max="0" step="1">
+      <span class="hint">to</span>
+      <input type="number" id="sensMax" value="-20" min="-120" max="0" step="1">
+    </div>
+  </div>
+  <div id="canvas-wrap">
+    <canvas id="canvas"></canvas>
+    <div id="info"></div>
+  </div>
+</div>
+<script>
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const FFT_SIZE = 4096;
+const FPS = 30;
+const MAX_FRAMES = 3600;
+const MAX_DB = -10;
+const MAX_CENTS = 50;
+
+let audioCtx = null, analyser = null, source = null, stream = null;
+let running = false, paused = false, frames = [], animId = null, lastFrameTime = 0;
+let canvas, ctx, infoEl, canvasW = 0, canvasH = 0, sampleRate = 44100, binWidth = 0;
+let transposeOffset = 0, scrubFrame = 0, zoom = 1.0;
+let refAFreq = 440;
+
+const NOTE_FREQ = m => refAFreq * Math.pow(2, (m - 69) / 12);
+function freqToMidi(f) { return 69 + 12 * Math.log2(f / refAFreq); }
+function freqToPitchInfo(freq) {
+  const midi = freqToMidi(freq);
+  const noteNum = Math.round(midi);
+  const cents = (midi - noteNum) * 100;
+  const pitchClass = ((noteNum % 12) + 12) % 12;
+  return { noteNum, cents, pitchClass };
+}
+
+const btnToggle = document.getElementById('btnToggle');
+const btnReset = document.getElementById('btnReset');
+const sensitivity = document.getElementById('sensitivity');
+const gateVal = document.getElementById('gateVal');
+const speedSlider = document.getElementById('speed');
+const speedVal = document.getElementById('speedVal');
+const brightnessSlider = document.getElementById('brightness');
+const brightVal = document.getElementById('brightVal');
+const transposeSel = document.getElementById('transpose');
+const statusEl = document.getElementById('status');
+const scrubber = document.getElementById('scrubber');
+const scrubTime = document.getElementById('scrubTime');
+const scrubGroup = document.getElementById('scrubGroup');
+const btnZoomOut = document.getElementById('btnZoomOut');
+const btnZoomIn = document.getElementById('btnZoomIn');
+const zoomDisplay = document.getElementById('zoomDisplay');
+const btnLoad = document.getElementById('btnLoad');
+const btnExport = document.getElementById('btnExport');
+const fileInput = document.getElementById('fileInput');
+const btnSettings = document.getElementById('btnSettings');
+const settingsPanel = document.getElementById('settingsPanel');
+const refAInput = document.getElementById('refA');
+const lineWidthSel = document.getElementById('lineWidth');
+const inTuneTol = document.getElementById('inTuneTol');
+const sensMin = document.getElementById('sensMin');
+const sensMax = document.getElementById('sensMax');
+canvas = document.getElementById('canvas');
+ctx = canvas.getContext('2d');
+infoEl = document.getElementById('info');
+
+async function startAudio() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    audioCtx = new AudioContext();
+    sampleRate = audioCtx.sampleRate;
+    source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = FFT_SIZE;
+    analyser.smoothingTimeConstant = 0.5;
+    analyser.minDecibels = -90;
+    analyser.maxDecibels = MAX_DB;
+    source.connect(analyser);
+    binWidth = sampleRate / FFT_SIZE;
+    return true;
+  } catch (e) { statusEl.textContent = 'Mic error: ' + e.message; return false; }
+}
+function stopAudio() {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  analyser = null; source = null;
+}
+function capture() {
+  if (!analyser) return null;
+  const data = new Float32Array(analyser.frequencyBinCount);
+  analyser.getFloatFrequencyData(data);
+  return data;
+}
+
+function findPeaks(raw, floorDb) {
+  const peaks = [];
+  const len = raw.length;
+  for (let i = 2; i < len - 2; i++) {
+    if (raw[i] <= raw[i-1] || raw[i] <= raw[i+1]) continue;
+    if (raw[i] < raw[i-2] || raw[i] < raw[i+2]) continue;
+    const db = raw[i];
+    if (db < floorDb) continue;
+    const y1 = raw[i-1], y2 = raw[i], y3 = raw[i+1];
+    const offset = (y3 - y1) / (2 * (2 * y2 - y1 - y3));
+    const exactBin = i + offset;
+    const freq = exactBin * binWidth;
+    const peakDb = y2 - (y3 - y1) * offset / 4;
+    const brightness = Math.max(0, Math.min(1, (peakDb - floorDb) / (MAX_DB - floorDb)));
+    peaks.push({ freq, db: peakDb, brightness });
+  }
+  peaks.sort((a, b) => b.brightness - a.brightness);
+  for (let i = 1; i < peaks.length; i++) {
+    for (let j = 0; j < i; j++) {
+      const ratio = peaks[i].freq / peaks[j].freq;
+      const nearestInt = Math.round(ratio);
+      if (nearestInt >= 2 && nearestInt <= 8 && Math.abs(ratio - nearestInt) < 0.03) {
+        peaks[i].brightness *= 0.12; break;
+      }
+    }
+  }
+  return peaks.slice(0, 10);
+}
+
+function noteName(pitchClass, offset) {
+  return NOTE_NAMES[((pitchClass + offset) % 12 + 12) % 12];
+}
+
+// FFT for file processing
+function fft(re, im) {
+  const N = re.length, bits = Math.log2(N) | 0;
+  for (let i = 0; i < N; i++) {
+    let j = 0;
+    for (let b = 0; b < bits; b++) j = (j << 1) | ((i >> b) & 1);
+    if (j > i) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= N; len <<= 1) {
+    const half = len >> 1, wRe = Math.cos(Math.PI / half), wIm = -Math.sin(Math.PI / half);
+    for (let i = 0; i < N; i += len) {
+      let cr = 1, ci = 0;
+      for (let j = 0; j < half; j++) {
+        const tr = cr * re[i+j+half] - ci * im[i+j+half];
+        const ti = cr * im[i+j+half] + ci * re[i+j+half];
+        re[i+j+half] = re[i+j] - tr; im[i+j+half] = im[i+j] - ti;
+        re[i+j] += tr; im[i+j] += ti;
+        [cr, ci] = [cr*wRe - ci*wIm, cr*wIm + ci*wRe];
+      }
+    }
+  }
+}
+function processAudioFile(pcmData, fs) {
+  const hop = Math.round(fs / FPS), result = [];
+  const total = Math.max(0, Math.floor((pcmData.length - FFT_SIZE) / hop) + 1);
+  for (let f = 0; f < total; f++) {
+    const off = f * hop;
+    const re = new Float64Array(FFT_SIZE);
+    for (let i = 0; i < FFT_SIZE; i++) {
+      const w = 0.5 * (1 - Math.cos(2 * Math.PI * i / (FFT_SIZE - 1)));
+      re[i] = pcmData[Math.min(off + i, pcmData.length - 1)] * w;
+    }
+    fft(re, new Float64Array(FFT_SIZE));
+    const frame = new Float32Array(FFT_SIZE / 2);
+    for (let i = 0; i < FFT_SIZE / 2; i++) {
+      const ms = re[i]*re[i] + re[FFT_SIZE-1-i]*re[FFT_SIZE-1-i];
+      frame[i] = Math.max(-120, 10 * Math.log10(ms / (FFT_SIZE * FFT_SIZE) + 1e-30));
+    }
+    result.push(frame);
+  }
+  return result;
+}
+function formatTime(s) { const m = Math.floor(s / 60); return m + ':' + String(Math.floor(s % 60)).padStart(2,'0'); }
+function showScrubber(show) {
+  scrubGroup.style.display = show ? '' : 'none';
+  btnZoomOut.style.display = show ? '' : 'none';
+  zoomDisplay.style.display = show ? '' : 'none';
+  btnZoomIn.style.display = show ? '' : 'none';
+}
+
+// Export
+const PSO_MAGIC = 0x504F5343;
+function exportFrames() {
+  const n = frames.length;
+  if (n === 0) return;
+  const bc = FFT_SIZE / 2;
+  const h = new ArrayBuffer(16);
+  const dv = new DataView(h);
+  dv.setUint32(0, PSO_MAGIC, true); dv.setUint32(4, FPS, true); dv.setUint32(8, FFT_SIZE, true); dv.setUint32(12, n, true);
+  const flat = new Float32Array(n * bc);
+  for (let i = 0; i < n; i++) flat.set(frames[i], i * bc);
+  const blob = new Blob([h, flat.buffer], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'pitchscope-' + new Date().toISOString().replace(/[:.]/g,'') + '.pscobin';
+  a.click(); URL.revokeObjectURL(url);
+}
+function importPso(buf) {
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== PSO_MAGIC) return null;
+  const nf = dv.getUint32(12, true);
+  if (nf === 0 || nf > 100000) return null;
+  const bc = FFT_SIZE / 2, fl = new Float32Array(buf, 16, nf * bc), r = [];
+  for (let i = 0; i < nf; i++) r.push(new Float32Array(fl.buffer, fl.byteOffset + i * bc * 4, bc));
+  return r;
+}
+
+// Time scale
+function drawTimeScale(rf, ef) {
+  const sy = canvasH - 14;
+  ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(0, sy, canvasW, 14);
+  const vs = Math.max(0, rf - Math.round((canvasW - 1) * ef));
+  const dur = (rf - vs) / FPS;
+  let ti = 1; if (dur > 20) ti = 5; if (dur > 60) ti = 10; if (dur > 180) ti = 30;
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.font = '9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+  const ft = Math.ceil(vs / FPS / ti) * ti;
+  for (let t = ft; t <= rf / FPS; t += ti) {
+    const x = canvasW - 1 - Math.round((rf - t * FPS) / ef);
+    if (x >= 0 && x < canvasW) { ctx.beginPath(); ctx.moveTo(x, sy); ctx.lineTo(x, sy + 4); ctx.stroke(); ctx.fillText(formatTime(t), x, sy + 12); }
+  }
+}
+
+let imgData = null, pix = null;
+function allocImageData() {
+  if (canvasW <= 0 || canvasH <= 0) return;
+  imgData = ctx.createImageData(canvasW, canvasH);
+  pix = imgData.data;
+}
+function resizeCanvas() {
+  const wrap = document.getElementById('canvas-wrap');
+  const rect = wrap.getBoundingClientRect();
+  canvasW = Math.floor(rect.width); canvasH = Math.floor(rect.height);
+  canvas.width = canvasW; canvas.height = canvasH;
+  canvas.style.width = canvasW + 'px'; canvas.style.height = canvasH + 'px';
+  allocImageData();
+}
+
+function render12Lane(speed) {
+  const n = frames.length;
+  if (n === 0 || !pix) return;
+  const floorDb = parseFloat(sensitivity.value);
+  const laneH = canvasH / 12;
+  let refFrame, effFpp;
+  if (paused) { refFrame = Math.min(scrubFrame, n - 1); effFpp = (FPS / speed) * zoom; }
+  else { refFrame = n - 1; effFpp = FPS / speed; }
+  const lineW = Math.round(parseFloat(lineWidthSel.value));
+  const halfBelow = Math.floor(lineW / 2);
+  const halfAbove = lineW - 1 - halfBelow;
+
+  pix.fill(0);
+  for (let col = 0; col < canvasW; col++) {
+    const frameIdx = refFrame - Math.round((canvasW - 1 - col) * effFpp);
+    if (frameIdx < 0 || frameIdx >= n) continue;
+    const raw = frames[frameIdx];
+    if (!raw) continue;
+    const peaks = findPeaks(raw, floorDb);
+    for (const p of peaks) {
+      const { cents, pitchClass } = freqToPitchInfo(p.freq);
+      const cy = (11 - pitchClass) * laneH + laneH / 2;
+      const yPos = cy - Math.max(-(laneH/2 - 1), Math.min(laneH/2 - 1, cents * (laneH/2) / MAX_CENTS));
+      const cNorm = (() => {
+        const tol = parseFloat(inTuneTol.value);
+        if (Math.abs(cents) <= tol) return 0;
+        const raw = Math.min(1, Math.abs(cents) / MAX_CENTS);
+        // Square-root curve: small deviations are more visible
+        const mapped = Math.sqrt(raw);
+        return mapped * (cents > 0 ? 1 : -1);
+      })();
+      let r, g, b;
+      if (cNorm > 0) { r = 255; g = Math.round(255 * (1-cNorm)); b = Math.round(255 * (1-cNorm)); }
+      else { const t = -cNorm; r = Math.round(255 * (1-t)); g = Math.round(255 * (1-t)); b = 255; }
+      const vol = Math.min(1, p.brightness * 1.5 * parseFloat(brightnessSlider.value));
+      r = Math.round(r * vol); g = Math.round(g * vol); b = Math.round(b * vol);
+      const baseY = Math.round(yPos);
+      // Draw line width — vertical pixels
+      for (let dy = -halfBelow; dy <= halfAbove; dy++) {
+        const yy = baseY + dy;
+        if (yy < 0 || yy >= canvasH) continue;
+        const idx = (yy * canvasW + col) * 4;
+        if (r + g + b > pix[idx] + pix[idx+1] + pix[idx+2]) {
+          pix[idx] = r; pix[idx+1] = g; pix[idx+2] = b; pix[idx+3] = 255;
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  for (let lane = 0; lane < 12; lane++) {
+    const inv = 11 - lane, y = inv * laneH, cy = y + laneH / 2;
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvasW, y); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(canvasW, cy); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = 'bold 12px monospace'; ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left'; ctx.fillText(noteName(lane, transposeOffset), 4, cy);
+    ctx.textAlign = 'right'; ctx.fillText(noteName(lane, transposeOffset), canvasW - 4, cy);
+  }
+  drawTimeScale(refFrame, effFpp);
+  if (n > 0) {
+    const raw = frames[refFrame], peaks = findPeaks(raw, floorDb);
+    const active = peaks.filter(p => p.brightness > 0.15).map(p => {
+      const midi = Math.round(freqToMidi(p.freq)) + transposeOffset;
+      const pc = ((midi % 12) + 12) % 12;
+      return NOTE_NAMES[pc] + (Math.floor(midi / 12) - 1);
+    }).slice(0, 8).join(' ');
+    infoEl.textContent = paused ? formatTime(refFrame / FPS) + ' / ' + formatTime(n / FPS) : (active || n + ' frames');
+  }
+}
+
+function render(now) {
+  animId = requestAnimationFrame(render);
+  if (now - lastFrameTime < 1000 / FPS) return;
+  lastFrameTime = now;
+  if (!running && !paused) return;
+  if (running && !paused) {
+    const raw = capture();
+    if (raw) { frames.push(raw); if (frames.length > MAX_FRAMES) frames.shift(); }
+  }
+  render12Lane(parseInt(speedSlider.value));
+}
+
+// Toggle button: Start / Pause / Resume
+btnToggle.addEventListener('click', async () => {
+  if (!running && !paused) {
+    // Stopped → Start
+    frames = []; showScrubber(false);
+    statusEl.textContent = 'Requesting mic...';
+    const ok = await startAudio();
+    if (!ok) return;
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    running = true; paused = false;
+    btnToggle.textContent = '⏸ Pause';
+    btnExport.disabled = true;
+    statusEl.textContent = 'Listening...';
+  } else if (running && !paused) {
+    // Running → Pause
+    paused = true;
+    btnToggle.textContent = '▶ Start';
+    btnToggle.classList.add('active');
+    scrubFrame = frames.length - 1; scrubber.max = frames.length - 1; scrubber.value = scrubFrame;
+    zoom = 1.0; zoomDisplay.textContent = '1×'; showScrubber(true); btnExport.disabled = false;
+    statusEl.textContent = 'Review — ' + frames.length + ' frames';
+  } else if (paused) {
+    // Paused → Resume
+    paused = false;
+    btnToggle.textContent = '⏸ Pause';
+    btnToggle.classList.remove('active');
+    showScrubber(false);
+    statusEl.textContent = running ? 'Listening...' : (frames.length + ' frames');
+    btnExport.disabled = true;
+  }
+});
+
+btnReset.addEventListener('click', () => {
+  frames = []; if (pix) pix.fill(0); if (imgData) ctx.putImageData(imgData, 0, 0);
+  if (running || paused) {
+    running = false; paused = false; showScrubber(false); stopAudio();
+    btnToggle.textContent = '▶ Start';
+    btnToggle.classList.remove('active');
+    btnExport.disabled = true;
+    statusEl.textContent = 'Reset';
+  } else {
+    statusEl.textContent = 'Cleared';
+  }
+});
+
+sensitivity.addEventListener('input', () => {
+  gateVal.textContent = sensitivity.value;
+});
+speedSlider.addEventListener('input', () => speedVal.textContent = speedSlider.value);
+brightnessSlider.addEventListener('input', () => brightVal.textContent = parseFloat(brightnessSlider.value).toFixed(1));
+transposeSel.addEventListener('change', () => { transposeOffset = parseInt(transposeSel.value); });
+scrubber.addEventListener('input', () => { scrubFrame = parseInt(scrubber.value); scrubTime.textContent = formatTime(scrubFrame / FPS); });
+btnZoomIn.addEventListener('click', () => { zoom = Math.min(8, zoom * 2); zoomDisplay.textContent = zoom + '×'; });
+btnZoomOut.addEventListener('click', () => { zoom = Math.max(0.25, zoom / 2); zoomDisplay.textContent = zoom + '×'; });
+btnLoad.addEventListener('click', () => fileInput.click());
+btnExport.addEventListener('click', () => { if (frames.length > 0) { exportFrames(); statusEl.textContent = 'Exported ' + formatTime(frames.length / FPS); setTimeout(() => { if (paused) statusEl.textContent = 'Review — ' + frames.length + ' frames'; }, 800); } });
+
+// Settings panel toggle
+btnSettings.addEventListener('click', () => {
+  settingsPanel.classList.toggle('visible');
+});
+
+// Reference A frequency
+refAInput.addEventListener('change', () => {
+  refAFreq = parseFloat(refAInput.value) || 440;
+});
+
+// Sensitivity range
+function updateSensRange() {
+  const mn = parseFloat(sensMin.value) || -90;
+  const mx = parseFloat(sensMax.value) || -20;
+  if (mn < mx) {
+    sensitivity.min = mn;
+    sensitivity.max = mx;
+  }
+}
+sensMin.addEventListener('change', updateSensRange);
+sensMax.addEventListener('change', updateSensRange);
+
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  statusEl.textContent = 'Loading ' + file.name + '...';
+  try {
+    const buf = await file.arrayBuffer();
+    const pso = importPso(buf);
+    if (pso) {
+      if (running || paused) { running = false; paused = false; stopAudio(); btnToggle.textContent = '▶ Start'; btnToggle.classList.remove('active'); }
+      frames = pso; paused = true;
+      btnToggle.textContent = '▶ Start';
+      btnToggle.classList.add('active');
+      scrubFrame = frames.length - 1; scrubber.max = frames.length - 1; scrubber.value = scrubFrame;
+      zoom = 1.0; zoomDisplay.textContent = '1×'; showScrubber(true); btnExport.disabled = false;
+      statusEl.textContent = 'Loaded ' + file.name + ' — ' + formatTime(frames.length / FPS);
+      e.target.value = ''; return;
+    }
+    const tempCtx = new AudioContext();
+    const audioBuffer = await tempCtx.decodeAudioData(buf);
+    const pcmData = audioBuffer.getChannelData(0);
+    statusEl.textContent = 'Processing ' + formatTime(audioBuffer.duration) + '...';
+    const newFrames = processAudioFile(pcmData, audioBuffer.sampleRate);
+    tempCtx.close();
+    if (newFrames.length === 0) { statusEl.textContent = 'No audio data found'; e.target.value = ''; return; }
+    if (running || paused) { running = false; paused = false; stopAudio(); btnToggle.textContent = '▶ Start'; btnToggle.classList.remove('active'); }
+    frames = newFrames; paused = true;
+    btnToggle.textContent = '▶ Start';
+    btnToggle.classList.add('active');
+    scrubFrame = frames.length - 1; scrubber.max = frames.length - 1; scrubber.value = scrubFrame;
+    zoom = 1.0; zoomDisplay.textContent = '1×'; showScrubber(true); btnExport.disabled = false;
+    statusEl.textContent = 'Loaded ' + file.name + ' — ' + formatTime(frames.length / FPS);
+  } catch (err) { statusEl.textContent = 'Error: ' + err.message; }
+  e.target.value = '';
+});
+
+function init() { resizeCanvas(); if (animId) cancelAnimationFrame(animId); animId = requestAnimationFrame(render); }
+window.addEventListener('resize', resizeCanvas);
+init();
+</script>
+</body>
+</html>
