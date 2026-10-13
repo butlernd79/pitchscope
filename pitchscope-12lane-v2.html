@@ -678,6 +678,11 @@ if(btnTest) btnTest.addEventListener('click', ()=>{
       if(frames.length>MAX_FRAMES){frames.shift();peakCache.shift();}
     }
     statusEl.textContent='Test: 120 frames, last '+peaks.length+' peaks'+(peaks.length?(' f='+Math.round(peaks[0].freq)+'Hz b='+peaks[0].brightness.toFixed(2)):' (none — gates too strict?)')+' — look at RIGHT edge';
+    paused=true; scrubFrame=frames.length-1;
+    try{ scrubber.max=frames.length-1; scrubber.value=scrubFrame; }catch(_){}
+    zoom=1.0; try{ zoomDisplay.textContent='1×'; }catch(_){}
+    showScrubber(true); try{ btnExport.disabled=false; }catch(_){}
+    try{ render12Lane(parseInt(speedSlider.value)); }catch(err){ statusEl.textContent='Draw err: '+err.message; }
   }catch(err){ statusEl.textContent='Test err: '+err.message; }
 });
 // Settings panel toggle
@@ -737,7 +742,24 @@ fileInput.addEventListener('change', async (e) => {
   e.target.value = '';
 });
 
-function init() { resizeCanvas(); if (animId) cancelAnimationFrame(animId); animId = requestAnimationFrame(render); }
+function drawIdleGrid(){
+  try{
+    if(!ctx||canvasW<=0||canvasH<=0) return;
+    ctx.fillStyle='#000'; ctx.fillRect(0,0,canvasW,canvasH);
+    const laneH=canvasH/12;
+    for(let lane=0;lane<12;lane++){
+      const inv=11-lane, y=inv*laneH, cy=y+laneH/2;
+      ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=0.5;
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvasW,y); ctx.stroke();
+      ctx.strokeStyle='rgba(255,255,255,0.45)'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(0,cy); ctx.lineTo(canvasW,cy); ctx.stroke();
+      ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.font='bold 12px monospace'; ctx.textBaseline='middle';
+      ctx.textAlign='left'; ctx.fillText(noteName(lane,transposeOffset),4,cy);
+      ctx.textAlign='right'; ctx.fillText(noteName(lane,transposeOffset),canvasW-4,cy);
+    }
+  }catch(_){}
+}
+function init() { resizeCanvas(); drawIdleGrid(); if (animId) cancelAnimationFrame(animId); animId = requestAnimationFrame(render); }
 window.addEventListener('resize', resizeCanvas);
 init();
 </script>
