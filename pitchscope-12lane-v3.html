@@ -121,7 +121,7 @@ html, body {
     <button id="btnTest" style="font-size:11px" title="Inject synthetic 440Hz test frame">🧪 Test</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v2 crisp engine</span>
+    <span id="status">Ready \u2014 v3n crisp engine</span>
   </div>
   <div id="settingsPanel">
     <div class="settings-row">
@@ -349,10 +349,14 @@ function findPeaksStable(spec, floorDb) {
     for(const k of kept){ if(Math.abs(c.m-k.m)<0.9){ clash=true; break; } }
     if(!clash){ kept.push(c); if(kept.length>=8) break; }
   }
-  const out=kept.map(c=>{
-    const brightness=Math.max(0,Math.min(1,(c.prom/12)*0.7+((c.score-floorDb)/((MAX_DB-floorDb)+25))*0.6));
-    return {freq:c.freq,db:c.db,brightness,m:c.m,prom:c.prom};
-  });
+  const out=[];
+  for(const c of kept){
+    if(!isFinite(c.freq)||c.freq<70||c.freq>5000) continue;
+    let b=(c.prom/12)*0.7+((c.score-floorDb)/((MAX_DB-floorDb)+25))*0.6;
+    if(!isFinite(b)) b=0;
+    b=Math.max(0,Math.min(1,b));
+    out.push({freq:c.freq,db:c.db,brightness:b,m:c.m,prom:c.prom});
+  }
   out.sort((a,b)=>b.brightness-a.brightness);
   return out;
 }
@@ -592,7 +596,10 @@ function render12Lane(speed) {
     }).slice(0, 8).join(' ');
     {
       let maxDb=-999; try{ const sp=peakCache[refFrame]; if(sp&&sp.length) maxDb=Math.max(...sp.map(q=>q.db)); }catch(e){}
-      const f0=(peaks.length&&isFinite(peaks[0].freq))?Math.round(peaks[0].freq)+'Hz b'+peaks[0].brightness.toFixed(2):'nofreq';
+      let f0='nofreq';
+      try{ const q0=peaks[0];
+        if(peaks.length) f0=(isFinite(q0.freq)?Math.round(q0.freq)+'Hz':'badF')+' b'+(isFinite(q0.brightness)?q0.brightness.toFixed(2):'NaN')+' p'+(isFinite(q0.prom)?q0.prom.toFixed(1):'NaN');
+      }catch(_){ f0='err'; }
       const diag=' | '+peaks.length+'p max'+(maxDb>-900?Math.round(maxDb)+'dB':'--')+' '+f0;
       const micd=' mic'+(micLevelDb>-120?Math.round(micLevelDb)+'dB':'--');
       const diag2=diag+micd;
