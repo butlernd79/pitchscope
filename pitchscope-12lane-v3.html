@@ -205,6 +205,7 @@ const MAX_DB = -10;
 const MAX_CENTS = 50;
 
 let audioCtx = null, analyser = null, source = null, stream = null, hpFilter = null;
+let micLevelDb=-999, micTimeBuf=null;
 let running = false, paused = false, frames = [], animId = null, lastFrameTime = 0;
 let canvas, ctx, infoEl, canvasW = 0, canvasH = 0, sampleRate = 44100, binWidth = 0;
 let transposeOffset = 0, scrubFrame = 0, zoom = 1.0;
@@ -255,7 +256,7 @@ infoEl = document.getElementById('info');
 
 async function startAudio() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
     audioCtx = new AudioContext();
     sampleRate = audioCtx.sampleRate;
     source = audioCtx.createMediaStreamSource(stream);
@@ -371,7 +372,18 @@ function findPeaksV1Raw(spec, floorDb) {
 }
 // legacy shim (file-load path / old callers)
 function findPeaks(raw, floorDb){ return findPeaksStable(smoothSpectrum(raw), floorDb); }
+function updateMicLevel(){
+  try{
+    if(!analyser) return;
+    if(!micTimeBuf || micTimeBuf.length!==analyser.fftSize) micTimeBuf=new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(micTimeBuf);
+    let sum=0; for(let i=0;i<micTimeBuf.length;i+=4){ sum+=micTimeBuf[i]*micTimeBuf[i]; }
+    const rms=Math.sqrt(sum/(micTimeBuf.length/4));
+    micLevelDb = rms>0 ? 20*Math.log10(rms+1e-9) : -120;
+  }catch(_){}
+}
 function onNewFrame(raw){
+  updateMicLevel();
   const spec=smoothSpectrum(raw);
   const floorDb=parseFloat(sensitivity.value);
   const detEl=document.getElementById('detector');
@@ -578,7 +590,9 @@ function render12Lane(speed) {
       let maxDb=-999; try{ const sp=peakCache[refFrame]; if(sp&&sp.length) maxDb=Math.max(...sp.map(q=>q.db)); }catch(e){}
       const f0=(peaks.length&&isFinite(peaks[0].freq))?Math.round(peaks[0].freq)+'Hz b'+peaks[0].brightness.toFixed(2):'nofreq';
       const diag=' | '+peaks.length+'p max'+(maxDb>-900?Math.round(maxDb)+'dB':'--')+' '+f0;
-      infoEl.textContent = (paused ? formatTime(refFrame / FPS)+' / '+formatTime(n / FPS) : (active || n+' frames'))+diag;
+      const micd=' mic'+(micLevelDb>-120?Math.round(micLevelDb)+'dB':'--');
+      const diag2=diag+micd;
+      infoEl.textContent = (paused ? formatTime(refFrame / FPS)+' / '+formatTime(n / FPS) : (active || n+' frames'))+diag2;
     }
   }
 }
