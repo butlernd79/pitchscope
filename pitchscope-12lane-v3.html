@@ -305,6 +305,8 @@ function sampleAt(spec, freq) {
   return spec[i0]*(1-frac)+spec[i1]*frac;
 }
 function findPeaksStable(spec, floorDb) {
+  if(!isFinite(floorDb)) floorDb=-80;
+  for(let i=0;i<spec.length;i++){ if(!isFinite(spec[i])) spec[i]=-120; }
   const promEl = document.getElementById('promDb');
   const promNeed = promEl ? (parseFloat(promEl.value)||8) : 8;
   const clarityEl = document.getElementById('clarity');
@@ -319,7 +321,7 @@ function findPeaksStable(spec, floorDb) {
     let lMin=v,rMin=v;
     for (let k=1;k<=4;k++){ if(spec[i-k]<lMin)lMin=spec[i-k]; if(spec[i+k]<rMin)rMin=spec[i+k]; }
     const prom=v-Math.max(lMin,rMin);
-    if (prom<promThresh) continue;
+    if(!isFinite(prom)||prom<promThresh) continue;
     const nbins=Math.max(4,Math.round(200/binWidth));
     const lo=Math.max(0,i-nbins), hi=Math.min(SPEC_MAX_BIN,i+nbins);
     const medArr=[]; for(let j=lo;j<=hi;j+=3) medArr.push(spec[j]);
@@ -331,6 +333,7 @@ function findPeaksStable(spec, floorDb) {
     const freq=(i+off)*binWidth;
     if(freq<70||freq>5000) continue;
     const peakDb=y2-(y3-y1)*off/4;
+    if(!isFinite(peakDb)) continue;
     const h2=sampleAt(spec,freq*2), h3=sampleAt(spec,freq*3);
     let score=peakDb+prom*0.5;
     if(h2>floorDb && (peakDb-h2)<12) score-=6;
@@ -364,6 +367,7 @@ function findPeaksV1Raw(spec, floorDb) {
     if(denom>0){ off=(y3-y1)/(2*denom); if(!isFinite(off)||Math.abs(off)>0.5) off=0; }
     const freq=(i+off)*binWidth;
     const peakDb=y2-(y3-y1)*off/4;
+    if(!isFinite(peakDb)) continue;
     const brightness=Math.max(0,Math.min(1,(peakDb-floorDb)/((MAX_DB-floorDb)||1)));
     peaks.push({freq,db:peakDb,brightness,prom:0,m:freqToMidi(freq)});
   }
