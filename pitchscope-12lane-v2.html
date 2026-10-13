@@ -118,7 +118,6 @@ html, body {
     <span class="val" id="zoomDisplay" style="display:none;min-width:24px">1×</span>
     <button id="btnZoomIn" title="Zoom in" style="display:none;font-size:11px">⊞</button>
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
-    <button id="btnTest" style="font-size:11px" title="Inject synthetic 440Hz test frame">🧪 Test</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
     <span id="status">Ready \u2014 v3n crisp engine</span>
@@ -682,34 +681,6 @@ if(analysisSel) analysisSel.addEventListener('change', ()=>{ if(paused&&frames.l
 if(promDbInput) promDbInput.addEventListener('change', ()=>{ if(paused&&frames.length){ rebuildPeakCache(); } });
 // v2b: surface JS errors + synthetic test frame
 window.addEventListener('error', (e)=>{ try{ statusEl.textContent='JS err: '+(e.message||'unknown'); }catch(_){} });
-const btnTest=document.getElementById('btnTest');
-if(btnTest) btnTest.addEventListener('click', ()=>{
-  try{
-    if(!binWidth) binWidth=(sampleRate||48000)/FFT_SIZE;
-    const N=FFT_SIZE/2, synth=new Float32Array(N).fill(-90);
-    const addTone=(f,db)=>{ const b=Math.round(f/binWidth); for(let d=-2;d<=2;d++){ const ii=b+d; if(ii>0&&ii<N) synth[ii]=Math.max(synth[ii], db-Math.abs(d)*6); } };
-    addTone(440,-45); addTone(880,-55); addTone(1320,-60);
-    const floorDb=parseFloat(sensitivity.value);
-    smoothBuf=null;
-    let peaks=[];
-    for(let r=0;r<120;r++){
-      const vib=440*(1+0.003*Math.sin(r*0.3));
-      const fr=new Float32Array(synth.length).fill(-90);
-      const addT=(f,db)=>{ const b=Math.round(f/binWidth); for(let d=-2;d<=2;d++){ const ii=b+d; if(ii>0&&ii<fr.length) fr[ii]=Math.max(fr[ii], db-Math.abs(d)*6); } };
-      addT(vib,-45); addT(vib*2,-55); addT(vib*3,-60);
-      const spec=smoothSpectrum(fr);
-      peaks=findPeaksStable(spec,floorDb);
-      frames.push(fr); peakCache.push(peaks);
-      if(frames.length>MAX_FRAMES){frames.shift();peakCache.shift();}
-    }
-    statusEl.textContent='Test: 120 frames, last '+peaks.length+' peaks'+(peaks.length?(' f='+Math.round(peaks[0].freq)+'Hz b='+peaks[0].brightness.toFixed(2)):' (none — gates too strict?)')+' — look at RIGHT edge';
-    paused=true; scrubFrame=frames.length-1;
-    try{ scrubber.max=frames.length-1; scrubber.value=scrubFrame; }catch(_){}
-    zoom=1.0; try{ zoomDisplay.textContent='1×'; }catch(_){}
-    showScrubber(true); try{ btnExport.disabled=false; }catch(_){}
-    try{ render12Lane(parseInt(speedSlider.value)); }catch(err){ statusEl.textContent='Draw err: '+err.message; }
-  }catch(err){ statusEl.textContent='Test err: '+err.message; }
-});
 // Settings panel toggle
 btnSettings.addEventListener('click', () => {
   settingsPanel.classList.toggle('visible');
