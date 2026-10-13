@@ -665,11 +665,19 @@ if(btnTest) btnTest.addEventListener('click', ()=>{
     const addTone=(f,db)=>{ const b=Math.round(f/binWidth); for(let d=-2;d<=2;d++){ const ii=b+d; if(ii>0&&ii<N) synth[ii]=Math.max(synth[ii], db-Math.abs(d)*6); } };
     addTone(440,-45); addTone(880,-55); addTone(1320,-60);
     const floorDb=parseFloat(sensitivity.value);
-    const spec=smoothSpectrum(synth);
-    const peaks=findPeaksStable(spec,floorDb);
-    frames.push(synth); peakCache.push(peaks);
-    if(frames.length>MAX_FRAMES){frames.shift();peakCache.shift();}
-    statusEl.textContent='Test frame: '+peaks.length+' peaks'+(peaks.length?(' f='+Math.round(peaks[0].freq)+'Hz b='+peaks[0].brightness.toFixed(2)):' (none — gates too strict?)');
+    smoothBuf=null;
+    let peaks=[];
+    for(let r=0;r<120;r++){
+      const vib=440*(1+0.003*Math.sin(r*0.3));
+      const fr=new Float32Array(synth.length).fill(-90);
+      const addT=(f,db)=>{ const b=Math.round(f/binWidth); for(let d=-2;d<=2;d++){ const ii=b+d; if(ii>0&&ii<fr.length) fr[ii]=Math.max(fr[ii], db-Math.abs(d)*6); } };
+      addT(vib,-45); addT(vib*2,-55); addT(vib*3,-60);
+      const spec=smoothSpectrum(fr);
+      peaks=findPeaksStable(spec,floorDb);
+      frames.push(fr); peakCache.push(peaks);
+      if(frames.length>MAX_FRAMES){frames.shift();peakCache.shift();}
+    }
+    statusEl.textContent='Test: 120 frames, last '+peaks.length+' peaks'+(peaks.length?(' f='+Math.round(peaks[0].freq)+'Hz b='+peaks[0].brightness.toFixed(2)):' (none — gates too strict?)')+' — look at RIGHT edge';
   }catch(err){ statusEl.textContent='Test err: '+err.message; }
 });
 // Settings panel toggle
