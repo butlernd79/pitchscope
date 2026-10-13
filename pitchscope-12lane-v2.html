@@ -95,8 +95,8 @@ html, body {
     <button id="btnReset">↺ Reset</button>
     <div class="ctrl-group">
       <label>Sensitivity</label>
-      <input type="range" id="sensitivity" min="-90" max="-20" value="-70" step="1">
-      <span class="val" id="gateVal">-70</span>
+      <input type="range" id="sensitivity" min="-90" max="-20" value="-80" step="1">
+      <span class="val" id="gateVal">-80</span>
     </div>
     <div class="ctrl-group">
       <label>Speed</label>
@@ -165,6 +165,13 @@ html, body {
       <span class="hint">max = quieter notes kept</span>
     </div>
     <div class="settings-row">
+      <label>Detector</label>
+      <select id="detector">
+        <option value="v2" selected>v2 crisp</option>
+        <option value="v1">v1 raw (compare)</option>
+      </select>
+    </div>
+    <div class="settings-row">
       <label>Analysis</label>
       <select id="analysis">
         <option value="fast">Fast (responsive)</option>
@@ -173,7 +180,7 @@ html, body {
     </div>
     <div class="settings-row">
       <label>Prominence</label>
-      <input type="number" id="promDb" value="8" min="3" max="15" step="1">
+      <input type="number" id="promDb" value="6" min="3" max="15" step="1">
       <span class="hint">dB above local area</span>
     </div>
     <div class="settings-row">
@@ -344,12 +351,36 @@ function findPeaksStable(spec, floorDb) {
   out.sort((a,b)=>b.brightness-a.brightness);
   return out;
 }
+function findPeaksV1Raw(spec, floorDb) {
+  const peaks = [];
+  for (let i=2;i<spec.length-2;i++) {
+    if (spec[i]<=spec[i-1]||spec[i]<=spec[i+1]) continue;
+    if (spec[i]<spec[i-2]||spec[i]<spec[i+2]) continue;
+    if (spec[i]<floorDb) continue;
+    const y1=spec[i-1],y2=spec[i],y3=spec[i+1];
+    const denom=(2*y2-y1-y3); let off=0;
+    if(denom>0){ off=(y3-y1)/(2*denom); if(!isFinite(off)||Math.abs(off)>0.5) off=0; }
+    const freq=(i+off)*binWidth;
+    const peakDb=y2-(y3-y1)*off/4;
+    const brightness=Math.max(0,Math.min(1,(peakDb-floorDb)/((MAX_DB-floorDb)||1)));
+    peaks.push({freq,db:peakDb,brightness,prom:0,m:freqToMidi(freq)});
+  }
+  peaks.sort((a,b)=>b.brightness-a.brightness);
+  return peaks.slice(0,10);
+}
 // legacy shim (file-load path / old callers)
 function findPeaks(raw, floorDb){ return findPeaksStable(smoothSpectrum(raw), floorDb); }
 function onNewFrame(raw){
   const spec=smoothSpectrum(raw);
   const floorDb=parseFloat(sensitivity.value);
-  const peaks=findPeaksStable(spec,floorDb);
+  const detEl=document.getElementById('detector');
+  const det=detEl?detEl.value:'v2';
+  let peaks = (det==='v1') ? findPeaksV1Raw(spec,floorDb) : findPeaksStable(spec,floorDb);
+  if(det!=='v1' && peaks.length===0){
+    // debug fallback: if raw energy above floor, show top-3 raw faint so screen never lies
+    const fb=findPeaksV1Raw(spec,floorDb).slice(0,3).map(c=>({...c,brightness:c.brightness*0.3,fallback:true}));
+    if(fb.length) peaks=fb;
+  }
   frames.push(raw); peakCache.push(peaks);
   if(frames.length>MAX_FRAMES){frames.shift();peakCache.shift();}
   return peaks;
@@ -357,8 +388,10 @@ function onNewFrame(raw){
 function rebuildPeakCache(){
   peakCache=[];
   const floorDb=parseFloat(sensitivity.value);
+  const detEl=document.getElementById('detector');
+  const det=detEl?detEl.value:'v2';
   smoothBuf=null;
-  for(const raw of frames){ const spec=smoothSpectrum(raw); peakCache.push(findPeaksStable(spec,floorDb)); }
+  for(const raw of frames){ const spec=smoothSpectrum(raw); peakCache.push((det==='v1')?findPeaksV1Raw(spec,floorDb):findPeaksStable(spec,floorDb)); }
 }
 function noteName(pitchClass, offset) {
   return NOTE_NAMES[((pitchClass + offset) % 12 + 12) % 12];
@@ -540,7 +573,11 @@ function render12Lane(speed) {
       const pc = ((midi % 12) + 12) % 12;
       return NOTE_NAMES[pc] + (Math.floor(midi / 12) - 1);
     }).slice(0, 8).join(' ');
-    infoEl.textContent = paused ? formatTime(refFrame / FPS) + ' / ' + formatTime(n / FPS) : (active || n + ' frames');
+    {
+      let maxDb=-999; try{ const sp=peakCache[refFrame]; if(sp&&sp.length) maxDb=Math.max(...sp.map(q=>q.db)); }catch(e){}
+      const diag=' | '+peaks.length+'p max'+(maxDb>-900?Math.round(maxDb)+'dB':'--');
+      infoEl.textContent = (paused ? formatTime(refFrame / FPS)+' / '+formatTime(n / FPS) : (active || n+' frames'))+diag;
+    }
   }
 }
 
