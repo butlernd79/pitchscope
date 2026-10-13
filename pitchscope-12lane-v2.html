@@ -121,7 +121,7 @@ html, body {
     <button id="btnTest" style="font-size:11px" title="Inject synthetic 440Hz test frame">🧪 Test</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v2 crisp engine</span>
+    <span id="status">Ready \u2014 v3n crisp engine</span>
   </div>
   <div id="settingsPanel">
     <div class="settings-row">
@@ -205,6 +205,7 @@ const MAX_DB = -10;
 const MAX_CENTS = 50;
 
 let audioCtx = null, analyser = null, source = null, stream = null, hpFilter = null;
+let micLevelDb=-999, micTimeBuf=null;
 let running = false, paused = false, frames = [], animId = null, lastFrameTime = 0;
 let canvas, ctx, infoEl, canvasW = 0, canvasH = 0, sampleRate = 44100, binWidth = 0;
 let transposeOffset = 0, scrubFrame = 0, zoom = 1.0;
@@ -255,7 +256,7 @@ infoEl = document.getElementById('info');
 
 async function startAudio() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
     audioCtx = new AudioContext();
     sampleRate = audioCtx.sampleRate;
     source = audioCtx.createMediaStreamSource(stream);
@@ -304,6 +305,8 @@ function sampleAt(spec, freq) {
   return spec[i0]*(1-frac)+spec[i1]*frac;
 }
 function findPeaksStable(spec, floorDb) {
+  if(!isFinite(floorDb)) floorDb=-80;
+  for(let i=0;i<spec.length;i++){ if(!isFinite(spec[i])) spec[i]=-120; }
   const promEl = document.getElementById('promDb');
   const promNeed = promEl ? (parseFloat(promEl.value)||8) : 8;
   const clarityEl = document.getElementById('clarity');
@@ -318,7 +321,7 @@ function findPeaksStable(spec, floorDb) {
     let lMin=v,rMin=v;
     for (let k=1;k<=4;k++){ if(spec[i-k]<lMin)lMin=spec[i-k]; if(spec[i+k]<rMin)rMin=spec[i+k]; }
     const prom=v-Math.max(lMin,rMin);
-    if (prom<promThresh) continue;
+    if(!isFinite(prom)||prom<promThresh) continue;
     const nbins=Math.max(4,Math.round(200/binWidth));
     const lo=Math.max(0,i-nbins), hi=Math.min(SPEC_MAX_BIN,i+nbins);
     const medArr=[]; for(let j=lo;j<=hi;j+=3) medArr.push(spec[j]);
@@ -330,6 +333,7 @@ function findPeaksStable(spec, floorDb) {
     const freq=(i+off)*binWidth;
     if(freq<70||freq>5000) continue;
     const peakDb=y2-(y3-y1)*off/4;
+    if(!isFinite(peakDb)) continue;
     const h2=sampleAt(spec,freq*2), h3=sampleAt(spec,freq*3);
     let score=peakDb+prom*0.5;
     if(h2>floorDb && (peakDb-h2)<12) score-=6;
@@ -345,10 +349,14 @@ function findPeaksStable(spec, floorDb) {
     for(const k of kept){ if(Math.abs(c.m-k.m)<0.9){ clash=true; break; } }
     if(!clash){ kept.push(c); if(kept.length>=8) break; }
   }
-  const out=kept.map(c=>{
-    const brightness=Math.max(0,Math.min(1,(c.prom/12)*0.7+((c.score-floorDb)/((MAX_DB-floorDb)+25))*0.6));
-    return {freq:c.freq,db:c.db,brightness,m:c.m,prom:c.prom};
-  });
+  const out=[];
+  for(const c of kept){
+    if(!isFinite(c.freq)||c.freq<70||c.freq>5000) continue;
+    let b=(c.prom/12)*0.7+((c.score-floorDb)/((MAX_DB-floorDb)+25))*0.6;
+    if(!isFinite(b)) b=0;
+    b=Math.max(0,Math.min(1,b));
+    out.push({freq:c.freq,db:c.db,brightness:b,m:c.m,prom:c.prom});
+  }
   out.sort((a,b)=>b.brightness-a.brightness);
   return out;
 }
@@ -363,6 +371,7 @@ function findPeaksV1Raw(spec, floorDb) {
     if(denom>0){ off=(y3-y1)/(2*denom); if(!isFinite(off)||Math.abs(off)>0.5) off=0; }
     const freq=(i+off)*binWidth;
     const peakDb=y2-(y3-y1)*off/4;
+    if(!isFinite(peakDb)) continue;
     const brightness=Math.max(0,Math.min(1,(peakDb-floorDb)/((MAX_DB-floorDb)||1)));
     peaks.push({freq,db:peakDb,brightness,prom:0,m:freqToMidi(freq)});
   }
@@ -371,7 +380,18 @@ function findPeaksV1Raw(spec, floorDb) {
 }
 // legacy shim (file-load path / old callers)
 function findPeaks(raw, floorDb){ return findPeaksStable(smoothSpectrum(raw), floorDb); }
+function updateMicLevel(){
+  try{
+    if(!analyser) return;
+    if(!micTimeBuf || micTimeBuf.length!==analyser.fftSize) micTimeBuf=new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(micTimeBuf);
+    let sum=0; for(let i=0;i<micTimeBuf.length;i+=4){ sum+=micTimeBuf[i]*micTimeBuf[i]; }
+    const rms=Math.sqrt(sum/(micTimeBuf.length/4));
+    micLevelDb = rms>0 ? 20*Math.log10(rms+1e-9) : -120;
+  }catch(_){}
+}
 function onNewFrame(raw){
+  updateMicLevel();
   const spec=smoothSpectrum(raw);
   const floorDb=parseFloat(sensitivity.value);
   const detEl=document.getElementById('detector');
@@ -576,9 +596,14 @@ function render12Lane(speed) {
     }).slice(0, 8).join(' ');
     {
       let maxDb=-999; try{ const sp=peakCache[refFrame]; if(sp&&sp.length) maxDb=Math.max(...sp.map(q=>q.db)); }catch(e){}
-      const f0=(peaks.length&&isFinite(peaks[0].freq))?Math.round(peaks[0].freq)+'Hz b'+peaks[0].brightness.toFixed(2):'nofreq';
+      let f0='nofreq';
+      try{ const q0=peaks[0];
+        if(peaks.length) f0=(isFinite(q0.freq)?Math.round(q0.freq)+'Hz':'badF')+' b'+(isFinite(q0.brightness)?q0.brightness.toFixed(2):'NaN')+' p'+(isFinite(q0.prom)?q0.prom.toFixed(1):'NaN');
+      }catch(_){ f0='err'; }
       const diag=' | '+peaks.length+'p max'+(maxDb>-900?Math.round(maxDb)+'dB':'--')+' '+f0;
-      infoEl.textContent = (paused ? formatTime(refFrame / FPS)+' / '+formatTime(n / FPS) : (active || n+' frames'))+diag;
+      const micd=' mic'+(micLevelDb>-120?Math.round(micLevelDb)+'dB':'--');
+      const diag2=diag+micd;
+      infoEl.textContent = (paused ? formatTime(refFrame / FPS)+' / '+formatTime(n / FPS) : (active || n+' frames'))+diag2;
     }
   }
 }
