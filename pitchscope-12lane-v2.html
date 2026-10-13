@@ -118,6 +118,7 @@ html, body {
     <span class="val" id="zoomDisplay" style="display:none;min-width:24px">1×</span>
     <button id="btnZoomIn" title="Zoom in" style="display:none;font-size:11px">⊞</button>
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
+    <button id="btnTest" style="font-size:11px" title="Inject synthetic 440Hz test frame">🧪 Test</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
     <span id="status">Ready \u2014 v2 crisp engine</span>
@@ -539,7 +540,7 @@ function render12Lane(speed) {
       let r, g, b;
       if (cNorm > 0) { r = 255; g = Math.round(255 * (1-cNorm)); b = Math.round(255 * (1-cNorm)); }
       else { const t = -cNorm; r = Math.round(255 * (1-t)); g = Math.round(255 * (1-t)); b = 255; }
-      const vol = Math.min(1, p.brightness * 1.5 * parseFloat(brightnessSlider.value));
+      const vol = Math.max(0.35, Math.min(1, p.brightness * 1.5 * parseFloat(brightnessSlider.value)));
       r = Math.round(r * vol); g = Math.round(g * vol); b = Math.round(b * vol);
       const baseY = Math.round(yPos);
       // Draw line width — vertical pixels
@@ -575,7 +576,8 @@ function render12Lane(speed) {
     }).slice(0, 8).join(' ');
     {
       let maxDb=-999; try{ const sp=peakCache[refFrame]; if(sp&&sp.length) maxDb=Math.max(...sp.map(q=>q.db)); }catch(e){}
-      const diag=' | '+peaks.length+'p max'+(maxDb>-900?Math.round(maxDb)+'dB':'--');
+      const f0=(peaks.length&&isFinite(peaks[0].freq))?Math.round(peaks[0].freq)+'Hz b'+peaks[0].brightness.toFixed(2):'nofreq';
+      const diag=' | '+peaks.length+'p max'+(maxDb>-900?Math.round(maxDb)+'dB':'--')+' '+f0;
       infoEl.textContent = (paused ? formatTime(refFrame / FPS)+' / '+formatTime(n / FPS) : (active || n+' frames'))+diag;
     }
   }
@@ -653,6 +655,23 @@ btnExport.addEventListener('click', () => { if (frames.length > 0) { exportFrame
 if(claritySel) claritySel.addEventListener('change', ()=>{ if(paused&&frames.length){ rebuildPeakCache(); } });
 if(analysisSel) analysisSel.addEventListener('change', ()=>{ if(paused&&frames.length){ rebuildPeakCache(); } });
 if(promDbInput) promDbInput.addEventListener('change', ()=>{ if(paused&&frames.length){ rebuildPeakCache(); } });
+// v2b: surface JS errors + synthetic test frame
+window.addEventListener('error', (e)=>{ try{ statusEl.textContent='JS err: '+(e.message||'unknown'); }catch(_){} });
+const btnTest=document.getElementById('btnTest');
+if(btnTest) btnTest.addEventListener('click', ()=>{
+  try{
+    if(!binWidth) binWidth=(sampleRate||48000)/FFT_SIZE;
+    const N=FFT_SIZE/2, synth=new Float32Array(N).fill(-90);
+    const addTone=(f,db)=>{ const b=Math.round(f/binWidth); for(let d=-2;d<=2;d++){ const ii=b+d; if(ii>0&&ii<N) synth[ii]=Math.max(synth[ii], db-Math.abs(d)*6); } };
+    addTone(440,-45); addTone(880,-55); addTone(1320,-60);
+    const floorDb=parseFloat(sensitivity.value);
+    const spec=smoothSpectrum(synth);
+    const peaks=findPeaksStable(spec,floorDb);
+    frames.push(synth); peakCache.push(peaks);
+    if(frames.length>MAX_FRAMES){frames.shift();peakCache.shift();}
+    statusEl.textContent='Test frame: '+peaks.length+' peaks'+(peaks.length?(' f='+Math.round(peaks[0].freq)+'Hz b='+peaks[0].brightness.toFixed(2)):' (none — gates too strict?)');
+  }catch(err){ statusEl.textContent='Test err: '+err.message; }
+});
 // Settings panel toggle
 btnSettings.addEventListener('click', () => {
   settingsPanel.classList.toggle('visible');
