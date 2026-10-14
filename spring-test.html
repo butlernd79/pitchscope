@@ -65,6 +65,8 @@ td.good { color:#8f8; } td.bad { color:#f88; }
     <div class="row">
       <button id="btnMic" class="primary">▶ Start mic</button>
       <button id="btnCap" disabled>⏺ Capture 3s tap</button>
+      <button id="btnDiag">🩺 Diagnose mic</button>
+      <div id="diag" class="dim" style="margin-top:4px"></div>
       <button id="btnReset">↺ Reset</button>
     </div>
     <div id="status">Mic off.</div>
@@ -261,6 +263,33 @@ btnMic.addEventListener('click', async ()=>{
     running=false; stopMic(); releaseWake(); btnMic.textContent='▶ Start mic'; btnCap.disabled=true;
     status.textContent='Mic off.';
   }
+});
+btnDiag.addEventListener('click', async ()=>{
+  const L=[];
+  try{
+    L.push('URL: '+location.href.split('?')[0]);
+    L.push('secure: '+window.isSecureContext);
+    L.push('mediaDevices: '+!!(navigator.mediaDevices));
+    L.push('getUserMedia: '+!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia));
+    if(navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices){
+      const devs=await navigator.mediaDevices.enumerateDevices();
+      const mics=devs.filter(d=>d.kind==='audioinput');
+      L.push('mic devices seen: '+mics.length);
+      mics.slice(0,4).forEach((m,i)=>L.push('mic'+i+': '+(m.label||'(label hidden — permission not granted yet)')));
+    } else L.push('enumerateDevices: missing');
+    if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
+      try{
+        const s=await navigator.mediaDevices.getUserMedia({audio:true});
+        const tr=s.getTracks()[0];
+        L.push('getUserMedia: OK ('+(tr.label||'no label')+')');
+        tr.stop(); s.getTracks().forEach(t=>{try{t.stop();}catch(_){}});
+      }catch(e){ L.push('getUserMedia: '+((e&&(e.name+': '+e.message))||e)); }
+    }
+    try{ const AC=window.AudioContext||window.webkitAudioContext; const ac=new AC(); L.push('AudioContext: '+ac.state+' @ '+ac.sampleRate+'Hz'); ac.close(); }
+    catch(e){ L.push('AudioContext: '+e.message); }
+  }catch(e){ L.push('diag crashed: '+e.message); }
+  diag.innerHTML=L.map(x=>x.replace(/</g,'&lt;')).join('<br>');
+  status.textContent='Diagnosis printed below the buttons.';
 });
 btnReset.addEventListener('click', ()=>{
   capFrames=[]; livePeaks=[]; smoothBuf=null;
