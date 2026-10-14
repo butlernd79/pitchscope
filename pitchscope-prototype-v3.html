@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>PitchScope Waterfall v3.1</title>
+<title>PitchScope Waterfall v3.2</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -120,7 +120,7 @@ html, body {
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v3.1 harm-filter+poly</span>
+    <span id="status">Ready \u2014 v3.2 contrast</span>
   </div>
   <div id="settingsPanel">
     <div class="settings-row">
@@ -451,7 +451,7 @@ function findPeaksStable(spec, floorDb) {
     if(!isFinite(peakDb)) continue;
     const h2=sampleAt(spec,freq*2);
     let score=peakDb+prom*0.5;
-    if(h2>floorDb && (peakDb-h2)<12) score-=6;
+    // (removed old HPS-lite -6 here: it dimmed brass fundamentals carrying a strong 2nd harmonic; sieve+contrast below handle it)
     cands.push({freq,db:peakDb,prom,score,m:freqToNote(freq)});
   }
   cands.sort((a,b)=>b.score-a.score);
@@ -465,11 +465,26 @@ function findPeaksStable(spec, floorDb) {
     if(!clash){ kept.push(c); if(kept.length>=8) break; }
   }
   const out=[];
+  const fundFreqs=[];
   for(const c of kept){
     if(!isFinite(c.freq)||c.freq<70||c.freq>5000) continue;
     let b=(c.prom/12)*0.7+((c.score-floorDb)/((MAX_DB-floorDb)+25))*0.6;
     if(!isFinite(b)) b=0;
     b=Math.max(0,Math.min(1,b));
+    // brightness contrast: harmonics of a louder peak go dim, fundamentals with harmonic support get lifted
+    let isHarm=false;
+    for(const ff of fundFreqs){
+      for(let n=2;n<=5;n++){
+        if(Math.abs(1200*Math.log2(c.freq/(ff*n)))<50){ isHarm=true; break; }
+      }
+      if(isHarm) break;
+    }
+    if(isHarm){ b*=0.25; }
+    else{
+      fundFreqs.push(c.freq);
+      const sup=(sampleAt(spec,c.freq*2)>floorDb?1:0)+(sampleAt(spec,c.freq*3)>floorDb?1:0);
+      b=Math.min(1,b*(1+0.15*sup)+0.05*sup);
+    }
     out.push({freq:c.freq,db:c.db,brightness:b,m:c.m,prom:c.prom});
   }
   out.sort((a,b)=>b.brightness-a.brightness);
