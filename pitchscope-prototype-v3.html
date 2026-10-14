@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>PitchScope Waterfall v3.5</title>
+<title>PitchScope Waterfall v3.6</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -99,19 +99,9 @@ select#setupList { min-width:120px; }
     <button id="btnToggle">▶ Start</button>
     <button id="btnReset">↺ Reset</button>
     <div class="ctrl-group">
-      <label>Sensitivity</label>
-      <input type="range" id="sensitivity" min="-90" max="-20" value="-80" step="1">
-      <span class="val" id="gateVal">-80</span>
-    </div>
-    <div class="ctrl-group">
       <label>Speed</label>
       <input type="range" id="speed" min="30" max="500" value="80" step="10">
       <span class="val" id="speedVal">80</span>
-    </div>
-    <div class="ctrl-group">
-      <label>Bright</label>
-      <input type="range" id="brightness" min="0.2" max="5.0" value="3.0" step="0.1">
-      <span class="val" id="brightVal">3.0</span>
     </div>
     <button id="btnSettings" title="Settings">⚙</button>
     <div class="ctrl-group" id="scrubGroup" style="display:none">
@@ -125,7 +115,7 @@ select#setupList { min-width:120px; }
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v3.5 menu-mirror</span>
+    <span id="status">Ready \u2014 v3.6 slimbar</span>
   </div>
   <div id="settingsPanel">
     <div class="set-section">Detection</div>
@@ -312,11 +302,11 @@ function freqToPitchInfo(freq) {
 
 const btnToggle = document.getElementById('btnToggle');
 const btnReset = document.getElementById('btnReset');
-const sensitivity = document.getElementById('sensitivity');
+const sensitivity = document.getElementById('setSens');
 const gateVal = document.getElementById('gateVal');
 const speedSlider = document.getElementById('speed');
 const speedVal = document.getElementById('speedVal');
-const brightnessSlider = document.getElementById('brightness');
+const brightnessSlider = document.getElementById('setBright');
 const brightVal = document.getElementById('brightVal');
 const rangeLow = document.getElementById('rangeLow');
 const rangeHigh = document.getElementById('rangeHigh');
@@ -798,9 +788,9 @@ btnReset.addEventListener('click', () => {
   }
 });
 
-sensitivity.addEventListener('input', () => gateVal.textContent = sensitivity.value);
+
 speedSlider.addEventListener('input', () => speedVal.textContent = speedSlider.value);
-brightnessSlider.addEventListener('input', () => brightVal.textContent = parseFloat(brightnessSlider.value).toFixed(1));
+
 /* dual written-pitch labels read live in render; no transpose state needed */
 rangeLow.addEventListener('change', () => { buildRefLines(); peakCache=[]; smoothBuf=null; frames = []; if (pix) pix.fill(0); if (imgData) ctx.putImageData(imgData, 0, 0); });
 rangeHigh.addEventListener('change', () => { buildRefLines(); peakCache=[]; smoothBuf=null; frames = []; if (pix) pix.fill(0); if (imgData) ctx.putImageData(imgData, 0, 0); });
@@ -893,7 +883,7 @@ fileInput.addEventListener('change', async (e) => {
 });
 // ---- settings persistence + named setups ----
 const SETTINGS_KEY='pitchscope-proto-settings';
-const FACTORY_DEFAULTS={sensitivity:'-80',speed:'80',brightness:'3.0',setSens:'-80',setBright:'3.0',promDb:'6',clarity:false,analysis:true,harmFilter:true,sensMin:'-90',sensMax:'-20',inTuneTol:'2',colorMode:true,lineWidth:'1',refA:'440',labelLeft:'2',labelRight:'9',labelMid:false,rangeLow:'48',rangeHigh:'72',noteLineBright:'0.2',noteLineWidth:'1'};
+const FACTORY_DEFAULTS={speed:'80',setSens:'-80',setBright:'3.0',promDb:'6',clarity:false,analysis:true,harmFilter:true,sensMin:'-90',sensMax:'-20',inTuneTol:'2',colorMode:true,lineWidth:'1',refA:'440',labelLeft:'2',labelRight:'9',labelMid:false,rangeLow:'48',rangeHigh:'72',noteLineBright:'0.2',noteLineWidth:'1'};
 function settingsControls(){
   const els=[...document.querySelectorAll('#settingsPanel input, #settingsPanel select'),sensitivity,speedSlider,brightnessSlider];
   return els.filter(el=>el&&el.id&&el.id!=='setupName'&&el.id!=='setupList');
@@ -907,6 +897,9 @@ function syncSettingBubbles(){
   set('setSensVal',sensitivity.value); set('setBrightVal',parseFloat(brightnessSlider.value).toFixed(1));
 }
 function applySettings(o){
+  o={...o};
+  if(!('setSens' in o)&&('sensitivity' in o)) o.setSens=o.sensitivity;
+  if(!('setBright' in o)&&('brightness' in o)) o.setBright=o.brightness;
   for(const el of settingsControls()){ if(!(el.id in o)) continue; if(el.type==='checkbox') el.checked=!!o[el.id]; else el.value=o[el.id]; }
   const _ss=document.getElementById('setSens'), _sb=document.getElementById('setBright');
   if(_ss) _ss.value=sensitivity.value;
