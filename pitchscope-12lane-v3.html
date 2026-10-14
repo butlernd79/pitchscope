@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>PitchScope 12-Lane v3.3</title>
+<title>PitchScope 12-Lane v3.4</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -125,10 +125,15 @@ select#setupList { min-width:120px; }
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v3.3 settings</span>
+    <span id="status">Ready \u2014 v3.4 menu-mirror</span>
   </div>
   <div id="settingsPanel">
     <div class="set-section">Detection</div>
+    <div class="settings-row">
+      <label>Sensitivity</label>
+      <input type="range" id="setSens" min="-90" max="-20" value="-80" step="1" style="width:90px">
+      <span class="val" id="setSensVal">-80</span>
+    </div>
     <div class="settings-row">
       <label>Prominence</label>
       <input type="range" id="promDb" min="3" max="15" value="6" step="1" style="width:90px">
@@ -162,6 +167,11 @@ select#setupList { min-width:120px; }
       <input type="range" id="sensMax" min="-120" max="0" value="-20" step="1" style="width:70px">
     </div>
     <div class="set-section">Display</div>
+    <div class="settings-row">
+      <label>Brightness</label>
+      <input type="range" id="setBright" min="0.2" max="5.0" value="3.0" step="0.1" style="width:90px">
+      <span class="val" id="setBrightVal">3.0</span>
+    </div>
     <div class="settings-row">
       <label>In-tune ±</label>
       <input type="range" id="inTuneTol" min="0" max="10" value="2" step="1" style="width:90px">
@@ -819,6 +829,8 @@ function updateSensRange() {
   if (mn < mx) {
     sensitivity.min = mn;
     sensitivity.max = mx;
+    const ss=document.getElementById('setSens');
+    if(ss){ ss.min=mn; ss.max=mx; }
   }
 }
 sensMin.addEventListener('change', updateSensRange);
@@ -881,7 +893,7 @@ function drawIdleGrid(){
 }
 // ---- settings persistence + named setups ----
 const SETTINGS_KEY='pitchscope-12lane-settings';
-const FACTORY_DEFAULTS={sensitivity:'-80',speed:'80',brightness:'3.0',promDb:'6',clarity:false,detector:true,analysis:true,harmFilter:true,sensMin:'-90',sensMax:'-20',inTuneTol:'2',lineWidth:'1',refA:'440',labelLeft:'2',labelRight:'9',labelMid:true,noteLineBright:'0.2',noteLineWidth:'1'};
+const FACTORY_DEFAULTS={sensitivity:'-80',speed:'80',brightness:'3.0',setSens:'-80',setBright:'3.0',promDb:'6',clarity:false,detector:true,analysis:true,harmFilter:true,sensMin:'-90',sensMax:'-20',inTuneTol:'2',lineWidth:'1',refA:'440',labelLeft:'2',labelRight:'9',labelMid:true,noteLineBright:'0.2',noteLineWidth:'1'};
 function settingsControls(){
   const els=[...document.querySelectorAll('#settingsPanel input, #settingsPanel select'),sensitivity,speedSlider,brightnessSlider];
   return els.filter(el=>el&&el.id&&el.id!=='setupName'&&el.id!=='setupList');
@@ -893,9 +905,13 @@ function syncSettingBubbles(){
   set('lwVal',Math.round(parseFloat(lineWidthSel.value))); set('nwVal',parseFloat(document.getElementById('noteLineWidth').value));
   set('noteLineVal',parseFloat(document.getElementById('noteLineBright').value).toFixed(2));
   set('gateVal',sensitivity.value); set('speedVal',speedSlider.value); set('brightVal',parseFloat(brightnessSlider.value).toFixed(1));
+  set('setSensVal',sensitivity.value); set('setBrightVal',parseFloat(brightnessSlider.value).toFixed(1));
 }
 function applySettings(o){
   for(const el of settingsControls()){ if(!(el.id in o)) continue; if(el.type==='checkbox') el.checked=!!o[el.id]; else el.value=o[el.id]; }
+  const _ss=document.getElementById('setSens'), _sb=document.getElementById('setBright');
+  if(_ss) _ss.value=sensitivity.value;
+  if(_sb) _sb.value=brightnessSlider.value;
   syncSettingBubbles();
   refAFreq=parseFloat(refAInput.value)||440;
   updateSensRange();
@@ -918,6 +934,11 @@ function restoreLast(){ try{ const s=localStorage.getItem(SETTINGS_KEY+'-last');
 settingsPanel.addEventListener('input',()=>{ syncSettingBubbles(); persistLast(); });
 settingsPanel.addEventListener('change',()=>{ syncSettingBubbles(); persistLast(); });
 document.getElementById('controls').addEventListener('input',persistLast);
+const setSensEl=document.getElementById('setSens'), setBrightEl=document.getElementById('setBright');
+if(setSensEl) setSensEl.addEventListener('input',(e)=>{ sensitivity.value=e.target.value; syncSettingBubbles(); });
+if(setBrightEl) setBrightEl.addEventListener('input',(e)=>{ brightnessSlider.value=e.target.value; syncSettingBubbles(); });
+sensitivity.addEventListener('input',()=>{ if(setSensEl) setSensEl.value=sensitivity.value; syncSettingBubbles(); });
+brightnessSlider.addEventListener('input',()=>{ if(setBrightEl) setBrightEl.value=brightnessSlider.value; syncSettingBubbles(); });
 document.getElementById('btnSaveSetup').addEventListener('click',()=>{
   const nm=(document.getElementById('setupName').value||'').trim()||('Setup '+(Object.keys(listSetups()).length+1));
   const all=listSetups(); all[nm]=collectSettings(); storeSetups(all); refreshSetupList();
