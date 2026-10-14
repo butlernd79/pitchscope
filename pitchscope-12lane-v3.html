@@ -129,11 +129,27 @@ html, body {
       <span class="hint">Hz</span>
     </div>
     <div class="settings-row">
-      <label>Transpose</label>
-      <select id="transpose">
+      <label>Left labels</label>
+      <select id="labelLeft">
+        <option value="0">Concert</option>
+        <option value="2" selected>Bb</option>
+        <option value="9">Eb</option>
+      </select>
+      <span class="hint">written pitch</span>
+    </div>
+    <div class="settings-row">
+      <label>Right labels</label>
+      <select id="labelRight">
         <option value="0">Concert</option>
         <option value="2">Bb</option>
-        <option value="9">Eb</option>
+        <option value="9" selected>Eb</option>
+      </select>
+    </div>
+    <div class="settings-row">
+      <label>Middle</label>
+      <select id="labelMid">
+        <option value="off">Off</option>
+        <option value="concert" selected>Concert faint</option>
       </select>
     </div>
     <div class="settings-row">
@@ -242,7 +258,9 @@ const speedSlider = document.getElementById('speed');
 const speedVal = document.getElementById('speedVal');
 const brightnessSlider = document.getElementById('brightness');
 const brightVal = document.getElementById('brightVal');
-const transposeSel = document.getElementById('transpose');
+const labelLeftSel = document.getElementById('labelLeft');
+const labelRightSel = document.getElementById('labelRight');
+const labelMidSel = document.getElementById('labelMid');
 const statusEl = document.getElementById('status');
 const scrubber = document.getElementById('scrubber');
 const scrubTime = document.getElementById('scrubTime');
@@ -595,9 +613,15 @@ function render12Lane(speed) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvasW, y); ctx.stroke();
     ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(canvasW, cy); ctx.stroke();
+    const lOff = labelLeftSel ? parseInt(labelLeftSel.value||'2') : 2;
+    const rOff = labelRightSel ? parseInt(labelRightSel.value||'9') : 9;
     ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = 'bold 12px monospace'; ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left'; ctx.fillText(noteName(lane, transposeOffset), 4, cy);
-    ctx.textAlign = 'right'; ctx.fillText(noteName(lane, transposeOffset), canvasW - 4, cy);
+    ctx.textAlign = 'left'; ctx.fillText(noteName(lane, lOff), 4, cy);
+    ctx.textAlign = 'right'; ctx.fillText(noteName(lane, rOff), canvasW - 4, cy);
+    if (labelMidSel && labelMidSel.value === 'concert') {
+      ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.textAlign = 'center';
+      ctx.fillText(noteName(lane, 0), canvasW / 2, cy);
+    }
   }
   drawTimeScale(refFrame, effFpp);
   if (n > 0) {
@@ -684,7 +708,7 @@ sensitivity.addEventListener('input', () => {
 });
 speedSlider.addEventListener('input', () => speedVal.textContent = speedSlider.value);
 brightnessSlider.addEventListener('input', () => brightVal.textContent = parseFloat(brightnessSlider.value).toFixed(1));
-transposeSel.addEventListener('change', () => { transposeOffset = parseInt(transposeSel.value); });
+/* dual written-pitch labels read live in render; no transpose state needed */
 scrubber.addEventListener('input', () => { scrubFrame = parseInt(scrubber.value); scrubTime.textContent = formatTime(scrubFrame / FPS); });
 btnZoomIn.addEventListener('click', () => { zoom = Math.min(8, zoom * 2); zoomDisplay.textContent = zoom + '×'; });
 btnZoomOut.addEventListener('click', () => { zoom = Math.max(0.25, zoom / 2); zoomDisplay.textContent = zoom + '×'; });
@@ -764,9 +788,12 @@ function drawIdleGrid(){
       ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvasW,y); ctx.stroke();
       ctx.strokeStyle='rgba(255,255,255,0.45)'; ctx.lineWidth=1;
       ctx.beginPath(); ctx.moveTo(0,cy); ctx.lineTo(canvasW,cy); ctx.stroke();
+      const ilOff=labelLeftSel?parseInt(labelLeftSel.value||'2'):2;
+      const irOff=labelRightSel?parseInt(labelRightSel.value||'9'):9;
       ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.font='bold 12px monospace'; ctx.textBaseline='middle';
-      ctx.textAlign='left'; ctx.fillText(noteName(lane,transposeOffset),4,cy);
-      ctx.textAlign='right'; ctx.fillText(noteName(lane,transposeOffset),canvasW-4,cy);
+      ctx.textAlign='left'; ctx.fillText(noteName(lane,ilOff),4,cy);
+      ctx.textAlign='right'; ctx.fillText(noteName(lane,irOff),canvasW-4,cy);
+      if(labelMidSel&&labelMidSel.value==='concert'){ctx.fillStyle='rgba(255,255,255,0.22)';ctx.textAlign='center';ctx.fillText(noteName(lane,0),canvasW/2,cy);}
     }
   }catch(_){}
 }
