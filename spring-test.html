@@ -66,6 +66,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
       <button id="btnMic" class="primary">▶ Start mic</button>
       <button id="btnStop">■ Stop</button>
       <button id="btnCap" disabled>⏺ Capture 3s tap</button>
+      <button id="btnSelf">🔧 Self-test (no mic)</button>
       <button id="btnDiag">🩺 Diagnose mic</button>
       <div id="diag" class="dim" style="margin-top:4px"></div>
       <button id="btnReset">↺ Reset</button>
@@ -74,7 +75,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
     <canvas id="canvas"></canvas>
     <div class="dim">Green verticals = predicted f1/f2/f3. Yellow = measured peaks. Spectrum 0–8 kHz.</div>
   </div>
-  <div class="dim" id="build">build 2026-10-14c · mic-error+labels</div>
+  <div class="dim" id="build">build 2026-10-14e · selftest</div>
   <h2>3 · Result</h2>
   <div class="card"><div id="peaks" class="dim">Capture a tap to see measured peaks vs predictions + decay.</div></div>
 </div>
@@ -294,6 +295,27 @@ btnDiag.addEventListener('click', async ()=>{
   }catch(e){ L.push('diag crashed: '+e.message); }
   diag.innerHTML=L.map(x=>x.replace(/</g,'&lt;')).join('<br>');
   status.textContent='Diagnosis printed below the buttons.';
+});
+btnSelf.addEventListener('click', ()=>{
+  // Pure DSP self-test: synthetic decaying 460Hz tap straight through findPeaks + fitDecay + table.
+  try{
+    if(!binWidth) binWidth=(sampleRate||48000)/FFT_SIZE;
+    const N=FFT_SIZE/2, frames=[];
+    for(let r=0;r<90;r++){
+      const fr=new Float32Array(N).fill(-90);
+      const atk=Math.max(0, 1-r/6); // strike transient: broadband burst first 200ms
+      const dec=Math.pow(10,(-20*(r/FPS))/20); // -20dB/s decay
+      const b=Math.round(460/binWidth);
+      const lvl=-45+20*Math.log10(Math.max(dec,1e-6));
+      for(let d=-3;d<=3;d++){ fr[b+d]=Math.max(fr[b+d], lvl-Math.abs(d)*6); }
+      fr[Math.round(1269/binWidth)]=Math.max(fr[Math.round(1269/binWidth)], lvl-12);
+      if(atk>0.05){ for(let i=Math.floor(500/binWidth);i<Math.floor(4000/binWidth);i+=7) fr[i]=Math.max(fr[i],-70+20*Math.log10(atk)); }
+      frames.push(fr);
+    }
+    capFrames=frames;
+    status.textContent='Self-test: synthetic tap analysed (no mic involved).';
+    analyse(currentPred());
+  }catch(err){ status.textContent='Self-test err: '+err.message; }
 });
 btnReset.addEventListener('click', ()=>{
   capFrames=[]; livePeaks=[]; smoothBuf=null;
