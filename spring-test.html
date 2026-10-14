@@ -63,7 +63,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
   <h2>2 · Tap test</h2>
   <div class="card">
     <div class="row">
-      <button id="btnMic" class="primary">▶ Mic on</button>
+      <button id="btnMic" class="primary">▶ Start mic</button>
       <button id="btnCap" disabled>⏺ Capture 3s tap</button>
       <button id="btnReset">↺ Reset</button>
     </div>
@@ -243,11 +243,11 @@ btnMic.addEventListener('click', async ()=>{
   if(!running){
     status.textContent='Requesting mic...';
     if(!(await startMic())) return;
-    running=true; requestWake(); btnMic.textContent='■ Mic off'; btnCap.disabled=false;
-    status.textContent='Listening — tap the spring, then Capture.';
+    running=true; requestWake(); btnMic.textContent='■ Stop mic'; btnCap.disabled=false;
+    status.textContent='MIC LIVE — listening. Tap the spring, then Capture.';
     (function loop(){ if(!running) return; drawLive(); requestAnimationFrame(loop); })();
   }else{
-    running=false; stopMic(); releaseWake(); btnMic.textContent='▶ Mic on'; btnCap.disabled=true;
+    running=false; stopMic(); releaseWake(); btnMic.textContent='▶ Start mic'; btnCap.disabled=true;
     status.textContent='Mic off.';
   }
 });
