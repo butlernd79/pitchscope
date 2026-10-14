@@ -64,6 +64,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
   <div class="card">
     <div class="row">
       <button id="btnMic" class="primary">▶ Start mic</button>
+      <button id="btnStop">■ Stop</button>
       <button id="btnCap" disabled>⏺ Capture 3s tap</button>
       <button id="btnDiag">🩺 Diagnose mic</button>
       <div id="diag" class="dim" style="margin-top:4px"></div>
@@ -260,9 +261,12 @@ btnMic.addEventListener('click', async ()=>{
     status.textContent='MIC LIVE — listening. Tap the spring, then Capture.';
     (function loop(){ if(!running) return; drawLive(); requestAnimationFrame(loop); })();
   }else{
-    running=false; stopMic(); releaseWake(); btnMic.textContent='▶ Start mic'; btnCap.disabled=true;
-    status.textContent='Mic off.';
+    status.textContent='Mic already live — tap ⏺ Capture (use ■ Stop to turn off).';
   }
+});
+btnStop.addEventListener('click', ()=>{
+  running=false; stopMic(); releaseWake(); btnCap.disabled=true;
+  status.textContent='Mic off.';
 });
 btnDiag.addEventListener('click', async ()=>{
   const L=[];
