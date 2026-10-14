@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Spring Tap Test (transplant f1)</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { width:100%; height:100%; background:#000; color:#ccc; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace; }
+#app { display:flex; flex-direction:column; height:100%; }
+#controls { display:flex; align-items:center; gap:6px; padding:6px 10px; background:#111; border-bottom:1px solid #222; flex-wrap:wrap; flex-shrink:0; }
+#controls button { background:#222; color:#ccc; border:1px solid #444; border-radius:5px; padding:6px 12px; font-size:13px; cursor:pointer; touch-action:manipulation; }
+#controls button:active { background:#333; }
+#controls button:disabled { opacity:0.4; cursor:default; }
+#status { margin-left:auto; font-size:11px; color:#8f8; white-space:nowrap; }
+#dims { display:flex; gap:8px; padding:6px 10px; background:#0d0d0d; border-bottom:1px solid #222; flex-wrap:wrap; align-items:center; flex-shrink:0; }
+#dims label { font-size:10px; color:#555; }
+#dims input[type=number],#dims select { background:#222; color:#ccc; border:1px solid #444; border-radius:4px; padding:3px 5px; font-size:12px; width:70px; }
+#dims select { width:auto; }
+#pred { font-size:11px; color:#888; padding:4px 10px; background:#0d0d0d; border-bottom:1px solid #222; }
+#canvas-wrap { flex:1; position:relative; min-height:200px; }
+#canvas { width:100%; height:100%; display:block; background:#000; }
+#result { font-size:12px; padding:6px 10px; background:#0d0d0d; border-top:1px solid #222; max-height:38%; overflow-y:auto; }
+#result table { border-collapse:collapse; font-size:12px; margin-top:4px; }
+#result td,#result th { border:1px solid #333; padding:3px 8px; text-align:right; }
+#result th { color:#888; font-weight:normal; }
+td.good { color:#8f8; } td.bad { color:#f88; }
+.dim { color:#666; font-size:11px; }
+.peakline { color:#fff; }
+#build { font-size:10px; color:#444; padding:2px 10px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="controls">
+    <button id="btnStart">▶ Start mic</button>
+    <button id="btnStop">■ Stop</button>
+    <button id="btnCap" disabled>⏺ Capture 3s tap</button>
+    <button id="btnSelf">🔧 Self-test (no mic)</button>
+    <button id="btnDiag">🩺 Diagnose mic</button>
+    <span id="status">Ready — transplant f1</span>
+  </div>
+  <div id="dims">
+    <label>Length mm</label><input type="number" id="inL" value="210" step="0.1">
+    <label>Width mm</label><input type="number" id="inW" value="40" step="0.1">
+    <label>Thick mm</label><input type="number" id="inT" value="4.89" step="0.01">
+    <label>Mass g</label><input type="number" id="inM" value="" step="0.1">
+    <label>E-L GPa</label><input type="number" id="inE1" value="31" step="0.5">
+    <label>E-W GPa</label><input type="number" id="inE2" value="10" step="0.5">
+    <label>Ends</label>
+    <select id="inB"><option value="ff" selected>Free-free</option><option value="cant">Cantilever</option></select>
+  </div>
+  <div id="pred"></div>
+  <div id="canvas-wrap"><canvas id="canvas"></canvas></div>
+  <div id="result"><span class="dim">Capture a tap (or run self-test) to see measured peaks vs predictions + decay.</span><div id="diag" class="dim"></div></div>
+  <div id="build">spring-tap transplant f1 · 2026-10-14</div>
+</div>
+<script>
+const FFT_SIZE = 4096;
+const FPS = 30;
+// predictions
+const BETA = { ff:[4.7300408,7.8532046,10.9956079], cant:[1.8751041,4.6940911,7.8547574] };
+// explicit element handles (same pattern as proven tuner)
+const btnStart = document.getElementById('btnStart');
+const btnStop = document.getElementById('btnStop');
+const btnCap = document.getElementById('btnCap');
+const btnSelf = document.getElementById('btnSelf');
+const btnDiag = document.getElementById('btnDiag');
+const statusEl = document.getElementById('status');
+const diagEl = document.getElementById('diag');
+const predEl = document.getElementById('pred');
+const resultEl = document.getElementById('result');
+const inL = document.getElementById('inL'), inW = document.getElementById('inW'),
+      inT = document.getElementById('inT'), inM = document.getElementById('inM'),
+      inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
+      inB = document.getElementById('inB');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+// audio state (same pattern as proven tuner)
+let audioCtx = null, analyser = null, source = null, stream = null, hpFilter = null;
+let wakeLock = null;
+async function requestWake(){
+  try{
+    if('wakeLock' in navigator){
+      try{ if(wakeLock) await wakeLock.release(); }catch(_){}
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  }catch(_){}
+}
+async function releaseWake(){ try{ if(wakeLock){ await wakeLock.release(); wakeLock=null; } }catch(_){} }
+document.addEventListener('visibilitychange', async ()=>{
+  if(document.visibilityState==='visible' && running) await requestWake();
+});
+let running = false, frames = [], animId = null, lastFrameTime = 0;
+let canvasW = 0, canvasH = 0, sampleRate = 44100, binWidth = 0;
+let smoothBuf = null, livePeaks = [], micLevelDb = -999, micTimeBuf = null;
+let capturing = false, capStart = 0;
+
+async function startAudio() {
+  try {
+    if(!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      statusEl.textContent = 'Mic needs the https page in Chrome/Safari (not a preview or in-app browser).';
+      return false;
+    }
+    stream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:true } });
+    audioCtx = new AudioContext();
+    sampleRate = audioCtx.sampleRate;
+    source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = FFT_SIZE;
+    analyser.smoothingTimeConstant = 0.5;
+    analyser.minDecibels = -90;
+    analyser.maxDecibels = -10;
+    hpFilter = audioCtx.createBiquadFilter();
+    hpFilter.type = 'highpass'; hpFilter.frequency.value = 70;
+    source.connect(hpFilter); hpFilter.connect(analyser);
+    binWidth = sampleRate / FFT_SIZE;
+    smoothBuf = null;
+    if(audioCtx.state === 'suspended') await audioCtx.resume();
+    return true;
+  } catch(e){
+    const n = (e && e.name) || '';
+    if(n==='NotAllowedError' || n==='SecurityError')
+      statusEl.textContent = 'Mic BLOCKED — padlock/ⓘ → Permissions → Microphone → Allow, then Start again.';
+    else statusEl.textContent = 'Mic error: ' + (e.message || e);
+    return false;
+  }
+}
+function stopAudio() {
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
+  if(audioCtx){ audioCtx.close(); audioCtx = null; }
+  analyser = null; source = null;
+}
+function capture() {
+  if(!analyser) return null;
+  const data = new Float32Array(analyser.frequencyBinCount);
+  analyser.getFloatFrequencyData(data);
+  return data;
+}
+function smoothSpectrum(raw){
+  const alpha = 0.30;
+  if(!smoothBuf || smoothBuf.length!==raw.length){ smoothBuf = Float32Array.from(raw); }
+  else{ for(let i=0;i<raw.length;i++) smoothBuf[i] += alpha*(raw[i]-smoothBuf[i]); }
+  return smoothBuf;
+}
+function findSpringPeaks(spec, floorDb){
+  for(let i=0;i<spec.length;i++){ if(!isFinite(spec[i])) spec[i] = -120; }
+  if(!isFinite(floorDb)) floorDb = -80;
+  const out = [];
+  const maxBin = Math.min(spec.length-4, Math.floor(8000/binWidth));
+  for(let i=3;i<maxBin;i++){
+    const v = spec[i];
+    if(v<floorDb || v<=spec[i-1] || v<=spec[i+1] || v<spec[i-2] || v<spec[i+2]) continue;
+    let lMin=v, rMin=v;
+    for(let k=1;k<=4;k++){ if(spec[i-k]<lMin)lMin=spec[i-k]; if(spec[i+k]<rMin)rMin=spec[i+k]; }
+    const prom = v - Math.max(lMin, rMin);
+    if(!isFinite(prom) || prom<6) continue;
+    const y1=spec[i-1], y2=spec[i], y3=spec[i+1], den=(2*y2-y1-y3);
+    if(den<=0) continue;
+    let off=(y3-y1)/(2*den); if(!isFinite(off)||Math.abs(off)>0.5) off=0;
+    const freq=(i+off)*binWidth;
+    if(!isFinite(freq)||freq<70||freq>8000) continue;
+    const peakDb=y2-(y3-y1)*off/4;
+    if(!isFinite(peakDb)) continue;
+    out.push({freq, db:peakDb, prom});
+  }
+  out.sort((a,b)=>(b.db+b.prom*0.3)-(a.db+a.prom*0.3));
+  const kept=[];
+  for(const c of out){
+    if(kept.some(k=>Math.abs(c.freq-k.freq)/k.freq<0.03)) continue;
+    kept.push(c); if(kept.length>=8) break;
+  }
+  return kept;
+}
+function updateMicLevel(){
+  try{
+    if(!analyser) return;
+    if(!micTimeBuf || micTimeBuf.length!==analyser.fftSize) micTimeBuf = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(micTimeBuf);
+    let sum=0; for(let i=0;i<micTimeBuf.length;i+=4){ sum += micTimeBuf[i]*micTimeBuf[i]; }
+    const rms = Math.sqrt(sum/(micTimeBuf.length/4));
+    micLevelDb = rms>0 ? 20*Math.log10(rms+1e-9) : -120;
+  }catch(_){}
+}
+function onNewFrame(raw){
+  updateMicLevel();
+  const spec = smoothSpectrum(raw);
+  livePeaks = findSpringPeaks(spec, -80);
+  frames.push(raw);
+  if(frames.length > 3600) frames.shift();
+  return livePeaks;
+}
+// predictions
+function calcPred(){
+  const L=+inL.value/1000, W=+inW.value/1000, T=+inT.value/1000;
+  const m=+inM.value/1000;
+  const E1=+inE1.value*1e9, E2=+inE2.value*1e9;
+  const rho = m>0 ? m/(L*W*T) : 1900;
+  const B = BETA[inB.value] || BETA.ff;
+  const f = B.map(b=>(b*b*T/(2*Math.PI*L*L))*Math.sqrt(E1/(12*rho)));
+  const fW = ((4.7300408**2)*T/(2*Math.PI*W*W))*Math.sqrt(E2/(12*rho));
+  return { L,W,T,rho,E1,f,fW, hasMass:m>0 };
+}
+function showPred(){
+  const p = calcPred();
+  const dens = p.hasMass ? (p.rho.toFixed(0)+' kg/m³ (weighed)') : (p.rho.toFixed(0)+' kg/m³ (ASSUMED — weigh a spring!)');
+  predEl.innerHTML =
+    'Predicted f1 <b>'+p.f[0].toFixed(0)+'</b> · f2 <b>'+p.f[1].toFixed(0)+'</b> · f3 <b>'+p.f[2].toFixed(0)+
+    '</b> · width f1 <b>'+p.fW.toFixed(0)+'</b> Hz &nbsp; <span class="dim">ρ '+dens+' · E from measurement: E = E_nom × (f_meas/f_pred)²</span>';
+  return p;
+}
+// canvas
+function resizeCanvas(){
+  const wrap = document.getElementById('canvas-wrap');
+  const rect = wrap.getBoundingClientRect();
+  canvasW = Math.max(50, Math.floor(rect.width)); canvasH = Math.max(50, Math.floor(rect.height));
+  canvas.width = canvasW; canvas.height = canvasH;
+}
+function drawSpectrum(){
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvasW,canvasH);
+  const p = calcPred();
+  ctx.font = '11px monospace'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+  p.f.forEach((f,i)=>{
+    const x = f/8000*canvasW;
+    ctx.strokeStyle = 'rgba(0,255,0,0.5)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvasH); ctx.stroke();
+    ctx.fillStyle = '#0f0'; ctx.fillText('p'+(i+1)+' '+f.toFixed(0), x+3, 2+i*13);
+  });
+  if(smoothBuf){
+    ctx.strokeStyle = '#888'; ctx.lineWidth = 1; ctx.beginPath();
+    const N = Math.min(smoothBuf.length, Math.floor(8000/(binWidth||11.7)));
+    for(let i=0;i<N;i++){
+      const x = i/N*canvasW;
+      const y = canvasH - ((smoothBuf[i]+120)/110)*canvasH;
+      i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+    }
+    ctx.stroke();
+    ctx.fillStyle = '#ff0'; ctx.textBaseline = 'bottom';
+    for(const pk of livePeaks.slice(0,6)){
+      const x = pk.freq/8000*canvasW;
+      ctx.fillRect(x-1, canvasH-60, 2, 60);
+      ctx.fillText(pk.freq.toFixed(0), x+3, canvasH-62);
+    }
+  } else {
+    ctx.fillStyle = '#444'; ctx.textBaseline = 'middle';
+    ctx.fillText(running ? 'listening…' : 'press Start mic', 12, canvasH/2);
+  }
+  ctx.fillStyle = '#555'; ctx.textBaseline = 'bottom'; ctx.textAlign = 'right';
+  ctx.fillText('mic '+(micLevelDb>-120 ? Math.round(micLevelDb)+'dB' : '--'), canvasW-6, canvasH-4);
+}
+// always-on loop from page load (same as proven tuner)
+function render(now){
+  animId = requestAnimationFrame(render);
+  if(now - lastFrameTime < 1000/FPS) return;
+  lastFrameTime = now;
+  if(running){
+    const raw = capture();
+    if(raw) onNewFrame(raw);
+  }
+  drawSpectrum();
+}
+// capture + analysis
+function fitDecay(slice, freq){
+  const bin = Math.round(freq/binWidth);
+  const pts = [];
+  slice.forEach((fr,i)=>{
+    let m = -120;
+    for(let d=-2;d<=2;d++){ const v=fr[bin+d]; if(v>m) m=v; }
+    pts.push([i/FPS, m]);
+  });
+  let pk = 0; for(let i=1;i<pts.length;i++) if(pts[i][1]>pts[pk][1]) pk=i;
+  const seg = pts.slice(pk).filter(q=>q[1]>-95);
+  if(seg.length<5) return null;
+  const n=seg.length; let sx=0,sy=0,sxx=0,sxy=0;
+  for(const [x,y] of seg){ sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
+  const slope=(n*sxy-sx*sy)/(n*sxx-sx*sx);
+  if(!(slope<0)) return null;
+  return { slope, t60:60/Math.abs(slope) };
+}
+function analyse(slice, p){
+  if(!slice || slice.length<10){ statusEl.textContent = 'Nothing captured.'; return; }
+  const skip = Math.min(5, Math.floor(slice.length/10));
+  const n = slice[0].length, avg = new Float32Array(n);
+  let cnt = 0;
+  for(let i=skip;i<slice.length;i++){ for(let j=0;j<n;j++) avg[j]+=slice[i][j]; cnt++; }
+  for(let j=0;j<n;j++) avg[j]/=cnt;
+  const pkList = findSpringPeaks(avg, -80).slice(0,6);
+  statusEl.textContent = 'Captured '+slice.length+' frames. Tap analysed.';
+  let html = '<table><tr><th>Measured Hz</th><th>dB</th><th>Nearest pred</th><th>ΔHz</th><th>E est (GPa)</th></tr>';
+  pkList.forEach((pk,i)=>{
+    let bi=0, bd=1e9;
+    p.f.forEach((f,j)=>{ const d=Math.abs(pk.freq-f); if(d<bd){bd=d;bi=j;} });
+    const fP=p.f[bi], eEst=(p.E1/1e9)*(pk.freq/fP)*(pk.freq/fP);
+    const cls = bd/fP<0.03 ? 'good' : (bd/fP<0.08 ? '' : 'bad');
+    html += '<tr><td class="peakline">'+pk.freq.toFixed(1)+'</td><td>'+pk.db.toFixed(0)+'</td><td>p'+(bi+1)+' '+fP.toFixed(0)+'</td><td class="'+cls+'">'+bd.toFixed(1)+'</td><td>'+eEst.toFixed(1)+'</td></tr>';
+    if(i===0){
+      const dec = fitDecay(slice, pk.freq);
+      html += '<tr><td colspan="5" style="text-align:left">Decay of strongest: '+(dec ? dec.slope.toFixed(1)+' dB/s → T60 ≈ '+dec.t60.toFixed(2)+' s' : 'could not fit (too short/noisy)')+'</td></tr>';
+    }
+  });
+  html += '</table><div class="dim">Green Δ = within 3% of prediction. E est uses nearest mode.</div>';
+  resultEl.innerHTML = html + '<div id="diag" class="dim"></div>';
+}
+// buttons
+btnStart.addEventListener('click', async ()=>{
+  if(running){ statusEl.textContent = 'Mic already live — tap ⏺ Capture (■ Stop to turn off).'; return; }
+  statusEl.textContent = 'Requesting mic...';
+  frames = []; smoothBuf = null;
+  const ok = await startAudio();
+  if(!ok) return;
+  running = true;
+  requestWake();
+  btnCap.disabled = false;
+  statusEl.textContent = 'MIC LIVE — listening. Tap the spring, then Capture.';
+});
+btnStop.addEventListener('click', ()=>{
+  running = false; capturing = false; stopAudio(); releaseWake();
+  btnCap.disabled = true;
+  statusEl.textContent = 'Mic off.';
+});
+btnCap.addEventListener('click', ()=>{
+  if(!running || capturing) return;
+  capturing = true; capStart = frames.length;
+  statusEl.textContent = 'Capturing 3s — TAP NOW!';
+  setTimeout(()=>{
+    capturing = false;
+    analyse(frames.slice(capStart, capStart+120), calcPred());
+  }, 3000);
+});
+btnSelf.addEventListener('click', ()=>{
+  try{
+    if(!binWidth) binWidth = (sampleRate||48000)/FFT_SIZE;
+    const N = FFT_SIZE/2;
+    for(let r=0;r<90;r++){
+      const fr = new Float32Array(N).fill(-90);
+      const dec = Math.pow(10, (-20*(r/FPS))/20);
+      const atk = Math.max(0, 1-r/6);
+      const b = Math.round(460/binWidth);
+      const lvl = -45 + 20*Math.log10(Math.max(dec,1e-6));
+      for(let d=-3;d<=3;d++){ fr[b+d] = Math.max(fr[b+d], lvl-Math.abs(d)*6); }
+      fr[Math.round(1269/binWidth)] = Math.max(fr[Math.round(1269/binWidth)], lvl-12);
+      if(atk>0.05){ for(let i=Math.floor(500/binWidth);i<Math.floor(4000/binWidth);i+=7) fr[i] = Math.max(fr[i], -70+20*Math.log10(atk)); }
+      onNewFrame(fr);
+    }
+    statusEl.textContent = 'Self-test: synthetic tap analysed (no mic involved).';
+    analyse(frames.slice(-90), calcPred());
+  }catch(err){ statusEl.textContent = 'Self-test err: '+err.message; }
+});
+btnDiag.addEventListener('click', async ()=>{
+  const L = [];
+  try{
+    L.push('URL: '+location.href.split('?')[0]);
+    L.push('secure: '+window.isSecureContext);
+    L.push('mediaDevices: '+!!(navigator.mediaDevices));
+    L.push('getUserMedia: '+!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia));
+    if(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices){
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      const mics = devs.filter(d=>d.kind==='audioinput');
+      L.push('mic devices seen: '+mics.length);
+      mics.slice(0,5).forEach((m,i)=>L.push('mic'+i+': '+(m.label||'(label hidden — permission not granted yet)')));
+    } else L.push('enumerateDevices: missing');
+    if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+      try{
+        const s = await navigator.mediaDevices.getUserMedia({audio:true});
+        const tr = s.getTracks()[0];
+        L.push('getUserMedia: OK ('+(tr.label||'no label')+')');
+        s.getTracks().forEach(t=>{try{t.stop();}catch(_){}});
+      }catch(e){ L.push('getUserMedia: '+((e&&(e.name+': '+e.message))||e)); }
+    }
+    try{ const AC = window.AudioContext||window.webkitAudioContext; const ac = new AC(); L.push('AudioContext: '+ac.state+' @ '+ac.sampleRate+'Hz'); ac.close(); }
+    catch(e){ L.push('AudioContext: '+e.message); }
+  }catch(e){ L.push('diag crashed: '+e.message); }
+  const liveDiag = document.getElementById('diag');
+  if(liveDiag) liveDiag.innerHTML = L.map(x=>x.replace(/</g,'&lt;')).join('<br>');
+  statusEl.textContent = 'Diagnosis printed in the result panel.';
+});
+for(const el of [inL,inW,inT,inM,inE1,inE2,inB]) el.addEventListener('change', showPred);
+// surface JS errors in status (same as proven tuner)
+window.addEventListener('error', (e)=>{ try{ statusEl.textContent = 'JS err: '+(e.message||'unknown'); }catch(_){} });
+window.addEventListener('resize', resizeCanvas);
+function init(){ resizeCanvas(); showPred(); if(animId) cancelAnimationFrame(animId); animId = requestAnimationFrame(render); }
+init();
+</script>
+</body>
+</html>
