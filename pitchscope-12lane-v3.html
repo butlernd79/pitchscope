@@ -204,6 +204,20 @@ const MAX_DB = -10;
 const MAX_CENTS = 50;
 
 let audioCtx = null, analyser = null, source = null, stream = null, hpFilter = null;
+let wakeLock = null;
+async function requestWake(){
+  try{
+    if('wakeLock' in navigator){
+      try{ if(wakeLock) await wakeLock.release(); }catch(_){}
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', ()=>{ wakeLock=null; });
+    }
+  }catch(_){}
+}
+async function releaseWake(){ try{ if(wakeLock){ await wakeLock.release(); wakeLock=null; } }catch(_){} }
+document.addEventListener('visibilitychange', async ()=>{
+  if(document.visibilityState==='visible' && running && !paused) await requestWake();
+});
 let micLevelDb=-999, micTimeBuf=null;
 let running = false, paused = false, frames = [], animId = null, lastFrameTime = 0;
 let canvas, ctx, infoEl, canvasW = 0, canvasH = 0, sampleRate = 44100, binWidth = 0;
@@ -629,6 +643,7 @@ btnToggle.addEventListener('click', async () => {
     if (!ok) return;
     if (audioCtx.state === 'suspended') await audioCtx.resume();
     running = true; paused = false;
+    requestWake();
     btnToggle.textContent = '⏸ Pause';
     btnExport.disabled = true;
     statusEl.textContent = 'Listening...';
@@ -654,7 +669,7 @@ btnToggle.addEventListener('click', async () => {
 btnReset.addEventListener('click', () => {
   frames = []; peakCache=[]; smoothBuf=null; if (pix) pix.fill(0); if (imgData) ctx.putImageData(imgData, 0, 0);
   if (running || paused) {
-    running = false; paused = false; showScrubber(false); stopAudio();
+    running = false; paused = false; showScrubber(false); stopAudio(); releaseWake();
     btnToggle.textContent = '▶ Start';
     btnToggle.classList.remove('active');
     btnExport.disabled = true;
