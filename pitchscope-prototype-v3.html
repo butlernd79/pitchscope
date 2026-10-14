@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>PitchScope Waterfall v3.2</title>
+<title>PitchScope Waterfall v3.3</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -120,7 +120,7 @@ html, body {
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v3.2 contrast</span>
+    <span id="status">Ready \u2014 v3.3 decay-fade</span>
   </div>
   <div id="settingsPanel">
     <div class="settings-row">
@@ -419,8 +419,21 @@ function findPeaksV1Raw(spec, floorDb) {
   peaks.sort((a,b)=>b.brightness-a.brightness);
   return peaks.slice(0,10);
 }
+function recentTrackFreqs(){
+  const out=[];
+  try{
+    const n=peakCache.length;
+    for(let f=n-1; f>=0 && (n-f)<=5; f--){
+      const pk=peakCache[f]; if(!pk) continue;
+      for(const p of pk){ if(p && isFinite(p.freq) && !p.fallback && (p.brightness||0)>0.12){ out.push(p.freq); if(out.length>=12) break; } }
+    }
+  }catch(_){}
+  return out;
+}
 function findPeaksStable(spec, floorDb) {
   if(!isFinite(floorDb)) floorDb=-80;
+  const tracks = recentTrackFreqs();
+  const lowFloor = floorDb-12;
   for(let i=0;i<spec.length;i++){ if(!isFinite(spec[i])) spec[i]=-120; }
   const promEl = document.getElementById('promDb');
   const promNeed = promEl ? (parseFloat(promEl.value)||6) : 6;
@@ -431,7 +444,10 @@ function findPeaksStable(spec, floorDb) {
   const cands=[];
   for (let i=3;i<SPEC_MAX_BIN;i++) {
     const v=spec[i];
-    if (v<floorDb||v<=spec[i-1]||v<=spec[i+1]) continue;
+    const bf=i*binWidth;
+    let fl=floorDb;
+    for(const tf of tracks){ if(Math.abs(1200*Math.log2(bf/tf))<50){ fl=lowFloor; break; } }
+    if (v<fl||v<=spec[i-1]||v<=spec[i+1]) continue;
     if (v<spec[i-2]||v<spec[i+2]) continue;
     let lMin=v,rMin=v;
     for (let k=1;k<=4;k++){ if(spec[i-k]<lMin)lMin=spec[i-k]; if(spec[i+k]<rMin)rMin=spec[i+k]; }
@@ -468,7 +484,9 @@ function findPeaksStable(spec, floorDb) {
   const fundFreqs=[];
   for(const c of kept){
     if(!isFinite(c.freq)||c.freq<70||c.freq>5000) continue;
-    let b=(c.prom/12)*0.7+((c.score-floorDb)/((MAX_DB-floorDb)+25))*0.6;
+    let b;
+    if(c.score<floorDb){ b=0.25*(1+(c.score-floorDb)/12); }
+    else{ b=(c.prom/12)*0.7+((c.score-floorDb)/((MAX_DB-floorDb)+25))*0.6; }
     if(!isFinite(b)) b=0;
     b=Math.max(0,Math.min(1,b));
     // brightness contrast: harmonics of a louder peak go dim, fundamentals with harmonic support get lifted
