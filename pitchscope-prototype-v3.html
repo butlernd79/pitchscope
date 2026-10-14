@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>PitchScope Waterfall v3</title>
+<title>PitchScope Waterfall v3.1</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -120,7 +120,7 @@ html, body {
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v3 harm-filter</span>
+    <span id="status">Ready \u2014 v3.1 harm-filter+poly</span>
   </div>
   <div id="settingsPanel">
     <div class="settings-row">
@@ -455,7 +455,7 @@ function findPeaksStable(spec, floorDb) {
     cands.push({freq,db:peakDb,prom,score,m:freqToNote(freq)});
   }
   cands.sort((a,b)=>b.score-a.score);
-  const relKill=(clarity==='max')?10:15;
+  const relKill=(clarity==='max')?18:25;
   const best=cands.length?cands[0].score:-999;
   const rel=cands.filter(c=>(best-c.score)<=relKill);
   const kept=[];
