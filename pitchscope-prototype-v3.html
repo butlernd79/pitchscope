@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>PitchScope Waterfall v3.6</title>
+<title>PitchScope Waterfall v3.7</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -115,7 +115,7 @@ select#setupList { min-width:120px; }
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v3.6 slimbar</span>
+    <span id="status">Ready \u2014 v3.7 loadbtn</span>
   </div>
   <div id="settingsPanel">
     <div class="set-section">Detection</div>
@@ -237,6 +237,7 @@ select#setupList { min-width:120px; }
     </div>
     <div class="settings-row">
       <select id="setupList"></select>
+      <button id="btnLoadSetup">Load</button>
       <button id="btnDelSetup">Delete</button>
       <button id="btnResetDefaults">Reset defaults</button>
     </div>
@@ -940,6 +941,10 @@ document.getElementById('btnSaveSetup').addEventListener('click',()=>{
 document.getElementById('setupList').addEventListener('change',(e)=>{
   const all=listSetups();
   if(e.target.value&&all[e.target.value]){ applySettings(all[e.target.value]); statusEl.textContent='Setup "'+e.target.value+'"'; }
+});
+document.getElementById('btnLoadSetup').addEventListener('click',()=>{
+  const sel=document.getElementById('setupList'), all=listSetups();
+  if(sel.value&&all[sel.value]){ applySettings(all[sel.value]); statusEl.textContent='Setup "'+sel.value+'"'; }
 });
 document.getElementById('btnDelSetup').addEventListener('click',()=>{
   const sel=document.getElementById('setupList'); if(!sel.value) return;
