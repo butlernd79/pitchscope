@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>PitchScope Waterfall v3.3</title>
+<title>PitchScope Waterfall v3.4</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -62,6 +62,11 @@ html, body {
   cursor: pointer; padding: 2px 4px; line-height: 1;
 }
 #btnSettings:hover { color: #aaa; }
+.set-section { width:100%; font-size:10px; color:#888; text-transform:uppercase; letter-spacing:1px; margin:4px 0 0; }
+input.toggle { width:36px; height:18px; accent-color:#3a3; cursor:pointer; }
+#setupName { background:#222; color:#ccc; border:1px solid #444; border-radius:4px; padding:3px 6px; font-size:11px; width:110px; }
+.settings-row button { background:#222; color:#ccc; border:1px solid #444; border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer; }
+select#setupList { min-width:120px; }
 /* Settings panel */
 #settingsPanel {
   width: 100%; background: #1a1a1a; border-bottom: 1px solid #333;
@@ -120,12 +125,60 @@ html, body {
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v3.3 decay-fade</span>
+    <span id="status">Ready \u2014 v3.4 settings</span>
   </div>
   <div id="settingsPanel">
+    <div class="set-section">Detection</div>
+    <div class="settings-row">
+      <label>Prominence</label>
+      <input type="range" id="promDb" min="3" max="15" value="6" step="1" style="width:90px">
+      <span class="val" id="promVal">6</span>
+      <span class="hint">dB above local area</span>
+    </div>
+    <div class="settings-row">
+      <label>Max sensitivity</label>
+      <input type="checkbox" id="clarity" class="toggle">
+      <span class="hint">keep quieter notes</span>
+    </div>
+    <div class="settings-row">
+      <label>Smooth lines</label>
+      <input type="checkbox" id="analysis" class="toggle" checked>
+      <span class="hint">off = fast response</span>
+    </div>
+    <div class="settings-row">
+      <label>Harmonic filter</label>
+      <input type="checkbox" id="harmFilter" class="toggle" checked>
+      <span class="hint">1 note = 1 line</span>
+    </div>
+    <div class="settings-row">
+      <label>Sens. range</label>
+      <input type="range" id="sensMin" min="-120" max="0" value="-90" step="1" style="width:70px">
+      <span class="hint">to</span>
+      <input type="range" id="sensMax" min="-120" max="0" value="-20" step="1" style="width:70px">
+    </div>
+    <div class="set-section">Display</div>
+    <div class="settings-row">
+      <label>In-tune ±</label>
+      <input type="range" id="inTuneTol" min="0" max="10" value="2" step="1" style="width:90px">
+      <span class="val" id="tolVal">2</span>
+      <span class="hint">cents</span>
+    </div>
+    <div class="settings-row">
+      <label>Colour-coded</label>
+      <input type="checkbox" id="colorMode" class="toggle" checked>
+      <span class="hint">white = in tune</span>
+    </div>
+    <div class="settings-row">
+      <label>Peak line width</label>
+      <input type="range" id="lineWidth" min="1" max="6" value="1" step="1" style="width:90px">
+      <span class="val" id="lwVal">1</span>
+      <span class="hint">px</span>
+    </div>
+    <div class="set-section">Note lines</div>
     <div class="settings-row">
       <label>Reference A</label>
-      <input type="number" id="refA" value="440" min="430" max="450" step="1">
+      <input type="range" id="refA" min="430" max="450" value="440" step="1" style="width:90px">
+      <span class="val" id="refAVal">440</span>
       <span class="hint">Hz</span>
     </div>
     <div class="settings-row">
@@ -146,14 +199,12 @@ html, body {
       </select>
     </div>
     <div class="settings-row">
-      <label>Middle</label>
-      <select id="labelMid">
-        <option value="off" selected>Off</option>
-        <option value="concert">Concert faint</option>
-      </select>
+      <label>Middle labels</label>
+      <input type="checkbox" id="labelMid" class="toggle">
+      <span class="hint">concert faint</span>
     </div>
     <div class="settings-row">
-      <label>Range Low</label>
+      <label>Range</label>
       <select id="rangeLow">
         <option value="36">C2</option>
         <option value="48" selected>C3</option>
@@ -169,70 +220,25 @@ html, body {
       </select>
     </div>
     <div class="settings-row">
-      <label>Line Width</label>
-      <select id="lineWidth">
-        <option value="1">1 px</option>
-        <option value="2">2 px</option>
-        <option value="3">3 px</option>
-        <option value="4">4 px</option>
-      </select>
-    </div>
-    <div class="settings-row">
-      <label>Note Line Brightness</label>
-      <input type="range" id="noteLineBright" min="0.05" max="0.5" value="0.2" step="0.05">
+      <label>Note line brightness</label>
+      <input type="range" id="noteLineBright" min="0.05" max="0.5" value="0.2" step="0.05" style="width:90px">
       <span class="val" id="noteLineVal">0.20</span>
     </div>
     <div class="settings-row">
-      <label>Colour-Coded</label>
-      <select id="colorMode">
-        <option value="1">On (White=In Tune)</option>
-        <option value="0">Off (Brightness only)</option>
-      </select>
+      <label>Note line width</label>
+      <input type="range" id="noteLineWidth" min="0.5" max="4" value="1" step="0.5" style="width:90px">
+      <span class="val" id="nwVal">1</span>
+      <span class="hint">px</span>
+    </div>
+    <div class="set-section">Setups</div>
+    <div class="settings-row">
+      <input type="text" id="setupName" placeholder="Setup name">
+      <button id="btnSaveSetup">Save setup</button>
     </div>
     <div class="settings-row">
-      <label>In-Tune ±</label>
-      <select id="inTuneTol">
-        <option value="0">0 cents</option>
-        <option value="1">1 cent</option>
-        <option value="2" selected>2 cents</option>
-        <option value="3">3 cents</option>
-        <option value="5">5 cents</option>
-        <option value="10">10 cents</option>
-      </select>
-    </div>
-    <div class="settings-row">
-      <label>Clarity</label>
-      <select id="clarity">
-        <option value="standard" selected>Standard</option>
-        <option value="max">Max sensitivity</option>
-      </select>
-      <span class="hint">max = quieter notes kept</span>
-    </div>
-    <div class="settings-row">
-      <label>Analysis</label>
-      <select id="analysis">
-        <option value="fast">Fast (responsive)</option>
-        <option value="smooth" selected>Smooth (stable lines)</option>
-      </select>
-    </div>
-    <div class="settings-row">
-      <label>Prominence</label>
-      <input type="number" id="promDb" value="6" min="3" max="15" step="1">
-      <span class="hint">dB above local area</span>
-    </div>
-    <div class="settings-row">
-      <label>Harmonic Filter</label>
-      <select id="harmFilter">
-        <option value="1" selected>On (1 note = 1 line)</option>
-        <option value="0">Off (show harmonics)</option>
-      </select>
-      <span class="hint">kills 2x-5x multiples</span>
-    </div>
-    <div class="settings-row">
-      <label>Sens. Min</label>
-      <input type="number" id="sensMin" value="-90" min="-120" max="0" step="1">
-      <span class="hint">to</span>
-      <input type="number" id="sensMax" value="-20" min="-120" max="0" step="1">
+      <select id="setupList"></select>
+      <button id="btnDelSetup">Delete</button>
+      <button id="btnResetDefaults">Reset defaults</button>
     </div>
   </div>
   <div id="canvas-wrap">
@@ -389,7 +395,7 @@ function buildRefLines() {
 let smoothBuf = null, peakCache = [];
 function smoothSpectrum(raw) {
   const modeEl = document.getElementById('analysis');
-  const mode = modeEl ? modeEl.value : 'smooth';
+  const mode = (modeEl && modeEl.checked) ? 'smooth' : 'fast';
   const alpha = (mode==='fast') ? 0.55 : 0.30;
   if (!smoothBuf || smoothBuf.length!==raw.length) { smoothBuf = Float32Array.from(raw); }
   else { for (let i=0;i<raw.length;i++) smoothBuf[i] += alpha*(raw[i]-smoothBuf[i]); }
@@ -438,7 +444,7 @@ function findPeaksStable(spec, floorDb) {
   const promEl = document.getElementById('promDb');
   const promNeed = promEl ? (parseFloat(promEl.value)||6) : 6;
   const clarityEl = document.getElementById('clarity');
-  const clarity = clarityEl ? clarityEl.value : 'standard';
+  const clarity = (clarityEl && clarityEl.checked) ? 'max' : 'standard';
   const promThresh = (clarity==='max') ? Math.max(3,promNeed-3) : promNeed;
   const SPEC_MAX_BIN = Math.min(spec.length-4, Math.floor(5000/binWidth));
   const cands=[];
@@ -511,7 +517,7 @@ function findPeaksStable(spec, floorDb) {
 function applyHarmFilter(peaks){
   try{
     const el = document.getElementById('harmFilter');
-    if(!el || el.value!=='1') return peaks;
+    if(!el || !el.checked) return peaks;
     if(!peaks || peaks.length<2) return peaks;
     const tolCents = 50;
     const byDb = [...peaks].sort((a,b)=>(b.db||0)-(a.db||0));
@@ -652,7 +658,7 @@ function renderWaterfall(speed) {
   const lineW = Math.round(parseFloat(lineWidthSel.value));
   const halfBelow = Math.floor(lineW / 2);
   const halfAbove = lineW - 1 - halfBelow;
-  const useColor = colorMode.value === '1';
+  const useColor = colorMode.checked;
 
   pix.fill(0);
   for (let col = 0; col < canvasW; col++) {
@@ -701,15 +707,16 @@ function renderWaterfall(speed) {
   }
   ctx.putImageData(imgData, 0, 0);
   const nlb = parseFloat(noteLineBright.value);
+  const nlw = parseFloat(document.getElementById('noteLineWidth').value)||1;
   for (const rl of noteRefLines) {
     const alpha = rl.isNat ? Math.min(1, 0.15 + nlb * 2) : Math.min(1, 0.06 + nlb);
-    ctx.strokeStyle = 'rgba(255,255,255,' + alpha.toFixed(2) + ')'; ctx.lineWidth = rl.isNat ? 1 : 0.5;
+    ctx.strokeStyle = 'rgba(255,255,255,' + alpha.toFixed(2) + ')'; ctx.lineWidth = rl.isNat ? nlw : Math.max(0.5, nlw/2);
     ctx.beginPath(); ctx.moveTo(0, rl.y); ctx.lineTo(canvasW, rl.y); ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,' + Math.min(1, 0.3 + nlb).toFixed(2) + ')';
     ctx.font = '12px monospace'; ctx.textBaseline = 'middle';
     ctx.textAlign = 'left'; ctx.fillText(rl.nameL, 4, rl.y);
     ctx.textAlign = 'right'; ctx.fillText(rl.nameR, canvasW - 4, rl.y);
-    if (labelMidSel && labelMidSel.value === 'concert') {
+    if (labelMidSel && labelMidSel.checked) {
       ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.textAlign = 'center';
       ctx.fillText(rl.nameC, canvasW / 2, rl.y);
     }
@@ -822,9 +829,10 @@ function drawIdleRefLines(){
     ctx.fillStyle='#000'; ctx.fillRect(0,0,canvasW,canvasH);
     buildRefLines();
     const nlb = parseFloat((document.getElementById('noteLineBright')||{}).value)||0.2;
+  const nlw = parseFloat((document.getElementById('noteLineWidth')||{}).value)||1;
     for(const rl of noteRefLines){
       const alpha = rl.isNat ? Math.min(1, 0.15 + nlb * 2) : Math.min(1, 0.06 + nlb);
-      ctx.strokeStyle='rgba(255,255,255,'+alpha.toFixed(2)+')'; ctx.lineWidth=rl.isNat?1:0.5;
+      ctx.strokeStyle='rgba(255,255,255,'+alpha.toFixed(2)+')'; ctx.lineWidth=rl.isNat?nlw:Math.max(0.5,nlw/2);
       ctx.beginPath(); ctx.moveTo(0,rl.y); ctx.lineTo(canvasW,rl.y); ctx.stroke();
     }
   }catch(_){}
@@ -871,8 +879,62 @@ fileInput.addEventListener('change', async (e) => {
   } catch (err) { statusEl.textContent = 'Error: ' + err.message; }
   e.target.value = '';
 });
+// ---- settings persistence + named setups ----
+const SETTINGS_KEY='pitchscope-proto-settings';
+const FACTORY_DEFAULTS={sensitivity:'-80',speed:'80',brightness:'3.0',promDb:'6',clarity:false,analysis:true,harmFilter:true,sensMin:'-90',sensMax:'-20',inTuneTol:'2',colorMode:true,lineWidth:'1',refA:'440',labelLeft:'2',labelRight:'9',labelMid:false,rangeLow:'48',rangeHigh:'72',noteLineBright:'0.2',noteLineWidth:'1'};
+function settingsControls(){
+  const els=[...document.querySelectorAll('#settingsPanel input, #settingsPanel select'),sensitivity,speedSlider,brightnessSlider];
+  return els.filter(el=>el&&el.id&&el.id!=='setupName'&&el.id!=='setupList');
+}
+function collectSettings(){ const o={}; for(const el of settingsControls()){ o[el.id]=(el.type==='checkbox')?!!el.checked:el.value; } return o; }
+function syncSettingBubbles(){
+  const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+  set('promVal',promDbInput.value); set('refAVal',refAInput.value); set('tolVal',inTuneTol.value);
+  set('lwVal',Math.round(parseFloat(lineWidthSel.value))); set('nwVal',parseFloat(document.getElementById('noteLineWidth').value));
+  set('gateVal',sensitivity.value); set('speedVal',speedSlider.value); set('brightVal',parseFloat(brightnessSlider.value).toFixed(1));
+}
+function applySettings(o){
+  for(const el of settingsControls()){ if(!(el.id in o)) continue; if(el.type==='checkbox') el.checked=!!o[el.id]; else el.value=o[el.id]; }
+  syncSettingBubbles();
+  refAFreq=parseFloat(refAInput.value)||440;
+  updateSensRange();
+  if(typeof buildRefLines==='function') buildRefLines();
+  if(paused&&frames.length){ rebuildPeakCache(); }
+  persistLast();
+}
+function persistLast(){ try{ localStorage.setItem(SETTINGS_KEY+'-last',JSON.stringify(collectSettings())); }catch(_){} }
+function listSetups(){ try{ return JSON.parse(localStorage.getItem(SETTINGS_KEY+'-setups')||'{}'); }catch(_){ return {}; } }
+function storeSetups(all){ try{ localStorage.setItem(SETTINGS_KEY+'-setups',JSON.stringify(all)); }catch(_){} }
+function refreshSetupList(){
+  const sel=document.getElementById('setupList'); if(!sel) return;
+  const cur=sel.value, all=listSetups(), names=Object.keys(all);
+  sel.innerHTML='';
+  if(!names.length){ const o=document.createElement('option'); o.value=''; o.textContent='No saved setups'; sel.appendChild(o); return; }
+  for(const n of names){ const o=document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o); }
+  if(cur&&all[cur]) sel.value=cur;
+}
+function restoreLast(){ try{ const s=localStorage.getItem(SETTINGS_KEY+'-last'); if(s) applySettings(JSON.parse(s)); }catch(_){} }
+settingsPanel.addEventListener('input',()=>{ syncSettingBubbles(); persistLast(); });
+settingsPanel.addEventListener('change',()=>{ syncSettingBubbles(); persistLast(); });
+document.getElementById('controls').addEventListener('input',persistLast);
+document.getElementById('btnSaveSetup').addEventListener('click',()=>{
+  const nm=(document.getElementById('setupName').value||'').trim()||('Setup '+(Object.keys(listSetups()).length+1));
+  const all=listSetups(); all[nm]=collectSettings(); storeSetups(all); refreshSetupList();
+  document.getElementById('setupList').value=nm; document.getElementById('setupName').value='';
+  statusEl.textContent='Saved setup "'+nm+'"';
+});
+document.getElementById('setupList').addEventListener('change',(e)=>{
+  const all=listSetups();
+  if(e.target.value&&all[e.target.value]){ applySettings(all[e.target.value]); statusEl.textContent='Setup "'+e.target.value+'"'; }
+});
+document.getElementById('btnDelSetup').addEventListener('click',()=>{
+  const sel=document.getElementById('setupList'); if(!sel.value) return;
+  const all=listSetups(); delete all[sel.value]; storeSetups(all); refreshSetupList();
+});
+document.getElementById('btnResetDefaults').addEventListener('click',()=>{ applySettings({...FACTORY_DEFAULTS}); statusEl.textContent='Defaults restored'; });
 function init() { resizeCanvas(); drawIdleRefLines(); if (animId) cancelAnimationFrame(animId); animId = requestAnimationFrame(render); }
 window.addEventListener('resize', resizeCanvas);
+restoreLast(); refreshSetupList();
 init();
 </script>
 </body>
