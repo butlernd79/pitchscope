@@ -124,6 +124,10 @@ document.addEventListener('visibilitychange', async ()=>{ if(document.visibility
 window.addEventListener('error', e=>{ try{ status.textContent='JS err: '+(e.message||'unknown'); }catch(_){} });
 
 async function startMic(){
+  if(!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    status.textContent='Mic needs the https github.io page in Chrome/Safari (not a preview or in-app browser).';
+    return false;
+  }
   try{
     stream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:true } });
     audioCtx = new (window.AudioContext||window.webkitAudioContext)();
@@ -135,7 +139,13 @@ async function startMic(){
     binWidth = sampleRate/FFT_SIZE; smoothBuf=null;
     if(audioCtx.state==='suspended') await audioCtx.resume();
     return true;
-  }catch(e){ status.textContent='Mic error: '+e.message; return false; }
+  }catch(e){
+    const n=(e&&(e.name||''))||'';
+    if(n==='NotAllowedError'||n==='SecurityError')
+      status.textContent='Mic BLOCKED for this site — tap padlock/ⓘ → Permissions → Microphone → Allow, then Start mic again.';
+    else status.textContent='Mic error: '+(e.message||e);
+    return false;
+  }
 }
 function stopMic(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } if(audioCtx){ audioCtx.close(); audioCtx=null; } analyser=null; }
 
