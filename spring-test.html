@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Spring Resonance Test (TEST BUILD)</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { background:#000; color:#ccc; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace; }
+#app { max-width:900px; margin:0 auto; padding:10px; }
+h2 { font-size:15px; color:#fff; margin:10px 0 6px; }
+.banner { background:#3a2a00; color:#fc3; font-size:12px; padding:6px 10px; border-radius:5px; margin-bottom:8px; }
+.card { background:#111; border:1px solid #333; border-radius:6px; padding:8px 10px; margin-bottom:8px; }
+.row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:4px 0; }
+label { font-size:11px; color:#888; }
+input[type=number],select { background:#222; color:#ccc; border:1px solid #444; border-radius:4px; padding:4px 6px; font-size:13px; width:76px; }
+button { background:#222; color:#ccc; border:1px solid #444; border-radius:5px; padding:7px 14px; font-size:13px; cursor:pointer; }
+button:active { background:#333; }
+button.primary { background:#1d4d1d; border-color:#3a3; color:#fff; }
+button:disabled { opacity:0.4; }
+#status { font-size:12px; color:#8f8; margin:4px 0; min-height:16px; }
+#canvas { width:100%; height:260px; display:block; background:#000; border:1px solid #333; border-radius:6px; }
+table { border-collapse:collapse; font-size:12px; margin-top:4px; }
+td,th { border:1px solid #333; padding:3px 8px; text-align:right; }
+th { color:#888; font-weight:normal; }
+td.good { color:#8f8; } td.bad { color:#f88; }
+#peaks { font-size:13px; line-height:1.7; }
+.peakline { color:#fff; }
+.dim { color:#666; font-size:11px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="banner">TEST BUILD — spring tap-test resonance. Free-free tap test only.</div>
+  <h2>1 · Spring</h2>
+  <div class="card">
+    <div class="row">
+      <label>Length mm</label><input type="number" id="inL" value="210" step="0.1">
+      <label>Width mm</label><input type="number" id="inW" value="40" step="0.1">
+      <label>Thick mm</label><input type="number" id="inT" value="4.89" step="0.01">
+      <label>Mass g</label><input type="number" id="inM" value="" step="0.1" placeholder="weigh it">
+    </div>
+    <div class="row">
+      <label>E length GPa</label><input type="number" id="inE1" value="31" step="0.5">
+      <label>E width GPa</label><input type="number" id="inE2" value="10" step="0.5">
+      <label>Boundary</label>
+      <select id="inB" style="width:130px">
+        <option value="ff" selected>Free-free (tap)</option>
+        <option value="cant">Cantilever (clamped 1 end)</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Preset</label>
+      <select id="preset" style="width:150px">
+        <option value="">— custom —</option>
+        <option value="A">Spring A 210×40×4.89</option>
+        <option value="B">Spring B (edit+save)</option>
+      </select>
+      <button id="btnSaveP">Save to B</button>
+    </div>
+    <div id="pred"></div>
+  </div>
+  <h2>2 · Tap test</h2>
+  <div class="card">
+    <div class="row">
+      <button id="btnMic" class="primary">▶ Mic on</button>
+      <button id="btnCap" disabled>⏺ Capture 3s tap</button>
+      <button id="btnReset">↺ Reset</button>
+    </div>
+    <div id="status">Mic off.</div>
+    <canvas id="canvas"></canvas>
+    <div class="dim">Green verticals = predicted f1/f2/f3. Yellow = measured peaks. Spectrum 0–8 kHz.</div>
+  </div>
+  <h2>3 · Result</h2>
+  <div class="card"><div id="peaks" class="dim">Capture a tap to see measured peaks vs predictions + decay.</div></div>
+</div>
+<script>
+'use strict';
+// ---------- predictions (free-free beam; cantilever betaL=1.8751) ----------
+const BETA = { ff: [4.7300408, 7.8532046, 10.9956079], cant: [1.8751041, 4.6940911, 7.8547574] };
+function calcPred(){
+  const L=+inL.value/1000, W=+inW.value/1000, T=+inT.value/1000;
+  const m=+inM.value/1000;
+  const E1=+inE1.value*1e9, E2=+inE2.value*1e9;
+  const rho = m>0 ? m/(L*W*T) : 1900;
+  const B = BETA[inB.value];
+  const f = B.map(b=>(b*b*T/(2*Math.PI*L*L))*Math.sqrt(E1/(12*rho)));
+  const fW = ((4.7300408**2)*T/(2*Math.PI*W*W))*Math.sqrt(E2/(12*rho));
+  return { L,W,T,rho,E1,f,fW, hasMass: m>0 };
+}
+function showPred(){
+  const p = calcPred();
+  const dens = p.hasMass ? (p.rho.toFixed(0)+' kg/m³ (weighed)') : (p.rho.toFixed(0)+' kg/m³ (ASSUMED — weigh a spring!)');
+  pred.innerHTML =
+    `<table><tr><th></th><th>f1</th><th>f2</th><th>f3</th><th>width f1</th></tr>`+
+    `<tr><td>Predicted Hz</td><td>${p.f[0].toFixed(0)}</td><td>${p.f[1].toFixed(0)}</td><td>${p.f[2].toFixed(0)}</td><td>${p.fW.toFixed(0)}</td></tr></table>`+
+    `<div class="dim">Density: ${dens} · E from measurement: E = E_nom × (f_meas/f_pred)²</div>`;
+  return p;
+}
+// ---------- presets (localStorage) ----------
+function loadPreset(){
+  if(preset.value==='A'){ inL.value=210; inW.value=40; inT.value=4.89; }
+  else if(preset.value==='B'){
+    try{ const s=JSON.parse(localStorage.getItem('springtest.B')||'null'); if(s){ inL.value=s.L; inW.value=s.W; inT.value=s.T; inM.value=s.M||''; } }catch(_){}
+  }
+  showPred();
+}
+btnSaveP.addEventListener('click', ()=>{
+  localStorage.setItem('springtest.B', JSON.stringify({L:inL.value,W:inW.value,T:inT.value,M:inM.value}));
+  status.textContent='Saved current dims to preset B.';
+});
+for(const el of [inL,inW,inT,inM,inE1,inE2,inB]) el.addEventListener('change', showPred);
+preset.addEventListener('change', loadPreset);
+
+// ---------- audio ----------
+const FFT_SIZE=4096, FPS=30;
+let audioCtx=null, analyser=null, stream=null, source=null, hpFilter=null;
+let running=false, binWidth=0, sampleRate=48000;
+let smoothBuf=null, livePeaks=[];
+let wakeLock=null;
+async function requestWake(){ try{ if('wakeLock' in navigator){ try{ if(wakeLock) await wakeLock.release(); }catch(_){} wakeLock=await navigator.wakeLock.request('screen'); } }catch(_){} }
+async function releaseWake(){ try{ if(wakeLock){ await wakeLock.release(); wakeLock=null; } }catch(_){} }
+document.addEventListener('visibilitychange', async ()=>{ if(document.visibilityState==='visible'&&running) await requestWake(); });
+window.addEventListener('error', e=>{ try{ status.textContent='JS err: '+(e.message||'unknown'); }catch(_){} });
+
+async function startMic(){
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:true } });
+    audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    sampleRate = audioCtx.sampleRate;
+    source = audioCtx.createMediaStreamSource(stream);
+    hpFilter = audioCtx.createBiquadFilter(); hpFilter.type='highpass'; hpFilter.frequency.value=70;
+    analyser = audioCtx.createAnalyser(); analyser.fftSize=FFT_SIZE; analyser.smoothingTimeConstant=0.2;
+    source.connect(hpFilter); hpFilter.connect(analyser);
+    binWidth = sampleRate/FFT_SIZE; smoothBuf=null;
+    if(audioCtx.state==='suspended') await audioCtx.resume();
+    return true;
+  }catch(e){ status.textContent='Mic error: '+e.message; return false; }
+}
+function stopMic(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } if(audioCtx){ audioCtx.close(); audioCtx=null; } analyser=null; }
+
+// ---------- detector (same proven core as PitchScope v2) ----------
+function smoothSpec(raw, alpha){
+  if(!smoothBuf||smoothBuf.length!==raw.length) smoothBuf=Float32Array.from(raw);
+  else for(let i=0;i<raw.length;i++) smoothBuf[i]+=alpha*(raw[i]-smoothBuf[i]);
+  return smoothBuf;
+}
+function findPeaks(spec, floorDb){
+  for(let i=0;i<spec.length;i++) if(!isFinite(spec[i])) spec[i]=-120;
+  if(!isFinite(floorDb)) floorDb=-80;
+  const out=[];
+  const maxBin=Math.min(spec.length-4, Math.floor(8000/binWidth));
+  for(let i=3;i<maxBin;i++){
+    const v=spec[i];
+    if(v<floorDb||v<=spec[i-1]||v<=spec[i+1]||v<spec[i-2]||v<spec[i+2]) continue;
+    let lMin=v,rMin=v;
+    for(let k=1;k<=4;k++){ if(spec[i-k]<lMin)lMin=spec[i-k]; if(spec[i+k]<rMin)rMin=spec[i+k]; }
+    const prom=v-Math.max(lMin,rMin);
+    if(!isFinite(prom)||prom<6) continue;
+    const y1=spec[i-1],y2=spec[i],y3=spec[i+1], den=(2*y2-y1-y3);
+    if(den<=0) continue;
+    let off=(y3-y1)/(2*den); if(!isFinite(off)||Math.abs(off)>0.5) off=0;
+    const freq=(i+off)*binWidth;
+    if(!isFinite(freq)||freq<70||freq>8000) continue;
+    const peakDb=y2-(y3-y1)*off/4;
+    if(!isFinite(peakDb)) continue;
+    out.push({freq, db:peakDb, prom});
+  }
+  out.sort((a,b)=>(b.db+b.prom*0.3)-(a.db+a.prom*0.3));
+  // winner-take-all within 3% (not semitones — inharmonic modes)
+  const kept=[];
+  for(const c of out){
+    if(kept.some(k=>Math.abs(c.freq-k.freq)/k.freq<0.03)) continue;
+    kept.push(c); if(kept.length>=8) break;
+  }
+  return kept;
+}
+
+// ---------- live view ----------
+const canvas=document.getElementById('canvas'), ctx=canvas.getContext('2d');
+function sizeCanvas(){
+  const r=canvas.getBoundingClientRect();
+  canvas.width=Math.max(300,Math.floor(r.width)); canvas.height=260;
+}
+window.addEventListener('resize', sizeCanvas); sizeCanvas();
+let capturing=false, capFrames=[];
+function drawLive(){
+  const p=calcPred();
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  // predicted lines
+  ctx.font='11px monospace'; ctx.textBaseline='top';
+  p.f.forEach((f,i)=>{
+    const x=f/8000*canvas.width;
+    ctx.strokeStyle='rgba(0,255,0,0.5)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke();
+    ctx.fillStyle='#0f0'; ctx.fillText('p'+(i+1)+' '+f.toFixed(0), x+3, 2+i*13);
+  });
+  if(!analyser) return;
+  const raw=new Float32Array(analyser.frequencyBinCount);
+  analyser.getFloatFrequencyData(raw);
+  const spec=smoothSpec(raw, 0.3);
+  const floorDb=-80;
+  livePeaks=findPeaks(spec, floorDb);
+  if(capturing) capFrames.push(Float32Array.from(raw));
+  // spectrum trace
+  ctx.strokeStyle='#888'; ctx.lineWidth=1; ctx.beginPath();
+  const N=Math.min(spec.length, Math.floor(8000/binWidth));
+  for(let i=0;i<N;i++){
+    const x=i/N*canvas.width;
+    const y=canvas.height-((spec[i]+120)/110)*canvas.height;
+    i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+  }
+  ctx.stroke();
+  // measured peak flags
+  ctx.fillStyle='#ff0'; ctx.textBaseline='bottom';
+  for(const pk of livePeaks.slice(0,6)){
+    const x=pk.freq/8000*canvas.width;
+    ctx.fillRect(x-1,canvas.height-60,2,60);
+    ctx.fillText(pk.freq.toFixed(0), x+3, canvas.height-62);
+  }
+}
+
+// ---------- capture + analysis ----------
+function fitDecay(frames, freq){
+  // track max dB within +-2 bins of freq across frames; fit line dB vs t after peak
+  const bin=Math.round(freq/binWidth);
+  const pts=[];
+  frames.forEach((fr,i)=>{
+    let m=-120;
+    for(let d=-2;d<=2;d++){ const v=fr[bin+d]; if(v>m)m=v; }
+    pts.push([i/FPS, m]);
+  });
+  let pk=0; for(let i=1;i<pts.length;i++) if(pts[i][1]>pts[pk][1]) pk=i;
+  const seg=pts.slice(pk).filter(q=>q[1]>-95);
+  if(seg.length<5) return null;
+  const n=seg.length; let sx=0,sy=0,sxx=0,sxy=0;
+  for(const [x,y] of seg){ sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
+  const slope=(n*sxy-sx*sy)/(n*sxx-sx*sx);
+  if(!(slope<0)) return null;
+  return { slope, t60: 60/Math.abs(slope) };
+}
+btnMic.addEventListener('click', async ()=>{
+  if(!running){
+    status.textContent='Requesting mic...';
+    if(!(await startMic())) return;
+    running=true; requestWake(); btnMic.textContent='■ Mic off'; btnCap.disabled=false;
+    status.textContent='Listening — tap the spring, then Capture.';
+    (function loop(){ if(!running) return; drawLive(); requestAnimationFrame(loop); })();
+  }else{
+    running=false; stopMic(); releaseWake(); btnMic.textContent='▶ Mic on'; btnCap.disabled=true;
+    status.textContent='Mic off.';
+  }
+});
+btnReset.addEventListener('click', ()=>{
+  capFrames=[]; livePeaks=[]; smoothBuf=null;
+  peaks.innerHTML='<span class="dim">Cleared.</span>'; drawLive();
+});
+btnCap.addEventListener('click', ()=>{
+  if(!running||capturing) return;
+  capturing=true; capFrames=[];
+  status.textContent='Capturing 3s — TAP NOW!';
+  setTimeout(()=>{
+    capturing=false;
+    analyse(currentPred());
+  }, 3000);
+});
+let _pred=calcPred();
+function currentPred(){ _pred=calcPred(); return _pred; }
+function analyse(p){
+  if(capFrames.length<10){ status.textContent='Nothing captured.'; return; }
+  // average spectrum skipping first 150ms (strike transient)
+  const skip=Math.floor(0.15*FPS), n=capFrames[0].length;
+  const avg=new Float32Array(n);
+  let cnt=0;
+  for(let i=skip;i<capFrames.length;i++){ for(let j=0;j<n;j++) avg[j]+=capFrames[i][j]; cnt++; }
+  for(let j=0;j<n;j++) avg[j]/=cnt;
+  const peaks=findPeaks(avg, -80).slice(0,6);
+  status.textContent='Captured '+capFrames.length+' frames. Tap analysed.';
+  let html='<table><tr><th>Measured Hz</th><th>dB</th><th>Nearest pred</th><th>ΔHz</th><th>E est (GPa)</th></tr>';
+  peaks.forEach((pk,i)=>{
+    let bi=0,bd=1e9;
+    p.f.forEach((f,j)=>{ const d=Math.abs(pk.freq-f); if(d<bd){bd=d;bi=j;} });
+    const fP=p.f[bi], eEst=(p.E1/1e9)*(pk.freq/fP)*(pk.freq/fP);
+    const cls = bd/fP<0.03 ? 'good' : (bd/fP<0.08 ? '' : 'bad');
+    html+=`<tr><td class="peakline">${pk.freq.toFixed(1)}</td><td>${pk.db.toFixed(0)}</td><td>p${bi+1} ${fP.toFixed(0)}</td><td class="${cls}">${bd.toFixed(1)}</td><td>${eEst.toFixed(1)}</td></tr>`;
+    if(i===0){
+      const dec=fitDecay(capFrames, pk.freq);
+      html+=`<tr><td colspan="5" style="text-align:left">Decay of strongest: ${dec? dec.slope.toFixed(1)+' dB/s → T60 ≈ '+dec.t60.toFixed(2)+' s' : 'could not fit (too short/noisy)'}</td></tr>`;
+    }
+  });
+  html+='</table><div class="dim">Green Δ = within 3% of prediction. E est uses nearest mode: E=E_nom×(f/f_pred)².</div>';
+  peaks.innerHTML=html;
+}
+showPred();
+</script>
+</body>
+</html>
