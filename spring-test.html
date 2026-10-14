@@ -318,10 +318,10 @@ function analyse(p){
   let cnt=0;
   for(let i=skip;i<capFrames.length;i++){ for(let j=0;j<n;j++) avg[j]+=capFrames[i][j]; cnt++; }
   for(let j=0;j<n;j++) avg[j]/=cnt;
-  const peaks=findPeaks(avg, -80).slice(0,6);
+  const pkList=findPeaks(avg, -80).slice(0,6);
   status.textContent='Captured '+capFrames.length+' frames. Tap analysed.';
   let html='<table><tr><th>Measured Hz</th><th>dB</th><th>Nearest pred</th><th>ΔHz</th><th>E est (GPa)</th></tr>';
-  peaks.forEach((pk,i)=>{
+  pkList.forEach((pk,i)=>{
     let bi=0,bd=1e9;
     p.f.forEach((f,j)=>{ const d=Math.abs(pk.freq-f); if(d<bd){bd=d;bi=j;} });
     const fP=p.f[bi], eEst=(p.E1/1e9)*(pk.freq/fP)*(pk.freq/fP);
