@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="PitchScope">
-<title>PitchScope Waterfall v3.12</title>
+<title>PitchScope Waterfall v3.13</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -75,9 +75,12 @@ input.toggle { width:36px; height:18px; accent-color:#3a3; cursor:pointer; }
 #setupName { background:#222; color:#ccc; border:1px solid #444; border-radius:4px; padding:3px 6px; font-size:11px; width:110px; }
 .settings-row button { background:#222; color:#ccc; border:1px solid #444; border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer; }
 select#setupList { min-width:120px; }
+#bigStart.resume { top:auto; bottom:56px; transform:translateX(-50%); font-size:16px; padding:12px 26px; }
+#bigStart small { font-size:12px; color:#999; }
 #bigStart { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:22px; padding:20px 44px; background:#141414; color:#fff; border:2px solid #3a3; border-radius:14px; z-index:5; cursor:pointer; }
 #app { padding-top: env(safe-area-inset-top, 0px); }
 
+#btnToggle{ display:none; }
 a.scope-link { background:#222; color:#ccc; border:1px solid #444; border-radius:5px; padding:6px 12px; font-size:13px; text-decoration:none; }
 /* Settings panel */
 #settingsPanel {
@@ -128,7 +131,7 @@ a.scope-link { background:#222; color:#ccc; border:1px solid #444; border-radius
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v3.12 tapstart</span>
+    <span id="status">Ready \u2014 v3.13 bigbtn</span>
   </div>
   <div id="settingsPanel">
     <div class="set-section">Detection</div>
@@ -757,9 +760,17 @@ function updateBigStart(){
   try{
     if(!bigStartEl) bigStartEl=document.getElementById('bigStart');
     const idle=!running&&!paused&&frames.length===0;
-    if(idle===bigStartShown) return;
-    bigStartShown=idle;
-    if(bigStartEl) bigStartEl.style.display=idle?'':'none';
+    const resume=paused&&frames.length>0;
+    const mode=idle?'start':(resume?'resume':'hide');
+    if(mode===bigStartShown) return;
+    bigStartShown=mode;
+    if(!bigStartEl) return;
+    if(mode==='hide'){ bigStartEl.style.display='none'; }
+    else{
+      bigStartEl.style.display='';
+      bigStartEl.classList.toggle('resume', mode==='resume');
+      bigStartEl.innerHTML = mode==='start' ? '&#9654; Start<br><small>tap here</small>' : '&#10074;&#10074; Paused<br><small>tap here to resume</small>';
+    }
   }catch(_){}
 }
 function render(now) {
