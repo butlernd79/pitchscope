@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="PitchScope">
-<title>PitchScope 12-Lane v3.9</title>
+<title>PitchScope 12-Lane v3.10</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -76,6 +76,7 @@ input.toggle { width:36px; height:18px; accent-color:#3a3; cursor:pointer; }
 .settings-row button { background:#222; color:#ccc; border:1px solid #444; border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer; }
 select#setupList { min-width:120px; }
 #app { padding-top: env(safe-area-inset-top, 0px); }
+@media (min-width:700px){ body.standalone-app #controls { padding-left: 78px; } }
 a.scope-link { background:#222; color:#ccc; border:1px solid #444; border-radius:5px; padding:6px 12px; font-size:13px; text-decoration:none; }
 /* Settings panel */
 #settingsPanel {
@@ -126,7 +127,7 @@ a.scope-link { background:#222; color:#ccc; border:1px solid #444; border-radius
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v3.9 ios</span>
+    <span id="status">Ready \u2014 v3.10 ipadbar</span>
   </div>
   <div id="settingsPanel">
     <div class="set-section">Detection</div>
@@ -892,6 +893,7 @@ function drawIdleGrid(){
   }catch(_){}
 }
 try{ if('serviceWorker' in (window.navigator||{})) window.addEventListener('load',()=>{ window.navigator.serviceWorker.register('sw.js').catch(()=>{}); }); }catch(_){}
+try{ if((window.navigator&&window.navigator.standalone===true)||(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)) document.body.classList.add('standalone-app'); }catch(_){}
 // ---- settings persistence + named setups ----
 const SETTINGS_KEY='pitchscope-12lane-settings';
 const FACTORY_DEFAULTS={speed:'80',setSens:'-80',setBright:'3.0',promDb:'6',clarity:false,detector:true,analysis:true,harmFilter:true,sensMin:'-90',sensMax:'-20',inTuneTol:'2',lineWidth:'1',refA:'440',labelLeft:'2',labelRight:'9',labelMid:true,noteLineBright:'0.2',noteLineWidth:'1'};
