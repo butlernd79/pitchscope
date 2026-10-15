@@ -3,7 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>PitchScope 12-Lane v3.6</title>
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>PitchScope 12-Lane v3.7</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -67,6 +70,7 @@ input.toggle { width:36px; height:18px; accent-color:#3a3; cursor:pointer; }
 #setupName { background:#222; color:#ccc; border:1px solid #444; border-radius:4px; padding:3px 6px; font-size:11px; width:110px; }
 .settings-row button { background:#222; color:#ccc; border:1px solid #444; border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer; }
 select#setupList { min-width:120px; }
+a.scope-link { background:#222; color:#ccc; border:1px solid #444; border-radius:5px; padding:6px 12px; font-size:13px; text-decoration:none; }
 /* Settings panel */
 #settingsPanel {
   width: 100%; background: #1a1a1a; border-bottom: 1px solid #333;
@@ -97,6 +101,7 @@ select#setupList { min-width:120px; }
 <div id="app">
   <div id="controls">
     <button id="btnToggle">▶ Start</button>
+    <a class="scope-link" id="btnScope" href="pitchscope-prototype-v3.html" title="Switch to waterfall view">&#127758;</a>
     <button id="btnReset">↺ Reset</button>
     <div class="ctrl-group">
       <label>Speed</label>
@@ -115,7 +120,7 @@ select#setupList { min-width:120px; }
     <button id="btnLoad" style="font-size:11px">📂 Load</button>
     <button id="btnExport" style="font-size:11px" disabled>💾 Export</button>
     <input type="file" id="fileInput" accept="audio/*,.pscobin" style="display:none">
-    <span id="status">Ready \u2014 v3.6 loadbtn</span>
+    <span id="status">Ready \u2014 v3.7 applinks</span>
   </div>
   <div id="settingsPanel">
     <div class="set-section">Detection</div>
@@ -880,6 +885,7 @@ function drawIdleGrid(){
     }
   }catch(_){}
 }
+try{ if('serviceWorker' in (window.navigator||{})) window.addEventListener('load',()=>{ window.navigator.serviceWorker.register('sw.js').catch(()=>{}); }); }catch(_){}
 // ---- settings persistence + named setups ----
 const SETTINGS_KEY='pitchscope-12lane-settings';
 const FACTORY_DEFAULTS={speed:'80',setSens:'-80',setBright:'3.0',promDb:'6',clarity:false,detector:true,analysis:true,harmFilter:true,sensMin:'-90',sensMax:'-20',inTuneTol:'2',lineWidth:'1',refA:'440',labelLeft:'2',labelRight:'9',labelMid:true,noteLineBright:'0.2',noteLineWidth:'1'};
