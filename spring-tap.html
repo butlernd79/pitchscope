@@ -331,7 +331,7 @@ function endSession(){
 function analyse(spec, taps){
   let pkList = findSpringPeaks(spec, -80);
   // anything 30 dB below the strongest peak in a tap spectrum is noise, not a mode
-  if(pkList.length) pkList = pkList.filter(k=>k.db > pkList[0].db - 20).slice(0,8);
+  if(pkList.length) pkList = pkList.filter(k=>k.db > pkList[0].db - 20).sort((a,b)=>a.freq-b.freq).slice(0,8);
   if(!pkList.length){ statusEl.textContent = 'No peaks found — tap harder or move the mic closer.'; return; }
   tapNo++;
   const p = calcPred(); const f1 = p.f[0];
