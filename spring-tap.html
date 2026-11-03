@@ -30,6 +30,8 @@ td.good { color:#8f8; } td.bad { color:#f88; }
 #build { font-size:10px; color:#444; padding:2px 10px; }
 .taphead { font-size:11px; color:#4d4; margin:6px 0 2px; letter-spacing:1px; }
 .taphead:first-child { margin-top:0; }
+.shot img { width:100%; max-width:660px; border:1px solid #333; border-radius:4px; display:block; margin-top:5px; }
+.shot a { text-decoration:none; }
 </style>
 </head>
 <body>
@@ -240,6 +242,16 @@ function drawSpectrum(){
     ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvasH); ctx.stroke();
     ctx.fillStyle = '#0f0'; ctx.fillText('p'+(i+1)+' '+f.toFixed(0), x+3, 2+i*13);
   });
+  // dB gridlines: without them a saved graph cannot show how far peaks sit above the noise
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 1;
+  ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.font = '9px monospace';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+  for(let db=-100; db<=-20; db+=20){
+    const y = canvasH - ((db+120)/110)*canvasH;
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvasW,y); ctx.stroke();
+    ctx.fillText(db+' dB', 3, y-2);
+  }
+  ctx.font = '11px monospace';
   if(envBuf){
     // blue = max envelope, survives Stop and stays on screen until the next session
     ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1.5; ctx.beginPath();
@@ -279,8 +291,41 @@ function drawSpectrum(){
     ctx.fillStyle = '#444'; ctx.textBaseline = 'middle';
     ctx.fillText(running ? 'listening…' : 'press Start mic', 12, canvasH/2);
   }
-  ctx.fillStyle = '#555'; ctx.textBaseline = 'bottom'; ctx.textAlign = 'right';
-  ctx.fillText('mic '+(micLevelDb>-120 ? Math.round(micLevelDb)+'dB' : '--'), canvasW-6, canvasH-4);
+  // frequency axis, so a saved graph is readable on its own
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.fillStyle = '#666';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.font = '10px monospace';
+  for(let f=1000; f<=8000; f+=1000){
+    const x = f/8000*canvasW;
+    ctx.beginPath(); ctx.moveTo(x, canvasH-12); ctx.lineTo(x, canvasH-6); ctx.stroke();
+    ctx.fillText((f/1000)+'k', x, canvasH-14);
+  }
+  ctx.textAlign = 'right'; ctx.textBaseline = 'top'; ctx.fillStyle = '#555';
+  ctx.fillText('mic '+(micLevelDb>-120 ? Math.round(micLevelDb)+'dB' : '--'), canvasW-6, 4);
+}
+// a saved graph must stand alone: plot band plus header and footer text
+function exportGraph(title, summary){
+  const pad = 24, LH = 14;
+  // wrap the footer instead of letting it run off the right edge
+  const lines = [];
+  let cur = '';
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.font = '12px monospace';
+  summary.split(' ').forEach(w=>{
+    const t = cur ? cur+' '+w : w;
+    if(probe.measureText(t).width > canvasW-14 && cur){ lines.push(cur); cur = w; } else cur = t;
+  });
+  if(cur) lines.push(cur);
+  const h2 = canvasH + pad + 8 + lines.length*LH;
+  const c = document.createElement('canvas');
+  c.width = canvasW; c.height = h2;
+  const g = c.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0,0,c.width,h2);
+  g.drawImage(canvas, 0, pad);
+  g.font = '12px monospace'; g.textBaseline = 'top'; g.textAlign = 'left';
+  g.fillStyle = '#ddd'; g.fillText(title, 6, 5);
+  g.fillStyle = '#888';
+  lines.forEach((ln,i)=>g.fillText(ln, 6, pad + canvasH + 6 + i*LH));
+  return c.toDataURL('image/png');
 }
 // always-on loop from page load (same as proven tuner)
 function render(now){
@@ -388,7 +433,7 @@ function analyse(spec, taps, decaySlice){
     .slice(0,3);
   const show = modeRows.concat(others).sort((a,b)=>a.freq-b.freq);
   tapNo++;
-  let html = '<div class="taphead">Session '+tapNo+' · '+taps+' tap'+(taps===1?'':'s')+' · max envelope</div>';
+  let html = '<div id="sess'+tapNo+'"><div class="taphead">Session '+tapNo+' · '+taps+' tap'+(taps===1?'':'s')+' · max envelope</div>';
   if(show.length){
     html += '<table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
     show.forEach(r=>{
@@ -412,11 +457,31 @@ function analyse(spec, taps, decaySlice){
     });
     if(parts.length) html += '<div class="dim">Damping from this single ring-down — '+parts.join(' · ')+'</div>';
   }
-  html += '<div class="dim">Each mode is the strongest response within ±10% of its prediction, whatever its level. E comes from frequency alone.</div>';
+  html += '<div class="dim">Each mode is the strongest response within ±10% of its prediction, whatever its level. E comes from frequency alone.</div>'+
+    '<div class="shot" id="shot'+tapNo+'"></div></div>';
   if(tapNo===1) resultEl.innerHTML = '';
   resultEl.insertAdjacentHTML('beforeend', html);
   resultEl.scrollTop = resultEl.scrollHeight;
   lastResultAt = performance.now();
+  // save the graph with the numbers, so peak quality and noise can be reviewed later
+  const shotId = tapNo;
+  const dims = (+inL.value)+'\u00d7'+(+inW.value)+'\u00d7'+(+inT.value)+' mm \u00b7 rho '+p.rho.toFixed(0)+' kg/m3'+(p.hasMass?'':' (assumed)')+(inB.value==='cant'?' \u00b7 cantilever':' \u00b7 free-free');
+  const D = new Date(), p2 = n=>String(n).padStart(2,'0');
+  const when = p2(D.getDate())+'/'+p2(D.getMonth()+1)+'/'+D.getFullYear()+' '+p2(D.getHours())+':'+p2(D.getMinutes());
+  const titleTxt = 'Session '+tapNo+' \u00b7 '+taps+' tap'+(taps===1?'':'s')+' \u00b7 '+when+' \u00b7 '+dims+
+    ' \u00b7 mic '+(sampleRate/1000).toFixed(1)+'kHz FFT '+FFT_SIZE;
+  const summaryTxt = 'measured / dev vs prediction / E:  ' +
+    modeRows.map(r=>'p'+r.mode+' '+r.freq.toFixed(0)+'Hz '+(r.pct>=0?'+':'')+r.pct.toFixed(1)+'% '+r.eEst.toFixed(1)+'GPa').join('  ') +
+    (missing.length ? '   no response: p'+missing.join(', p') : '');
+  requestAnimationFrame(()=>{
+    drawSpectrum();
+    const el = document.getElementById('shot'+shotId);
+    if(!el) return;
+    const url = exportGraph(titleTxt, summaryTxt);
+    const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'');
+    el.innerHTML = '<a href="'+url+'" download="spring-session-'+shotId+'-'+stamp+'.png">'+
+      '<img alt="session '+shotId+' spectrum" src="'+url+'"></a><div class="dim">Click the graph to save it as a PNG.</div>';
+  });
   statusEl.textContent = 'Session '+tapNo+' saved — '+modeRows.length+' of 4 modes found from '+taps+' tap'+(taps===1?'':'s')+'.';
 }
 // buttons
