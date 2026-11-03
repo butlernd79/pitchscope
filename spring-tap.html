@@ -28,6 +28,8 @@ td.good { color:#8f8; } td.bad { color:#f88; }
 .dim { color:#666; font-size:11px; }
 .peakline { color:#fff; }
 #build { font-size:10px; color:#444; padding:2px 10px; }
+.taphead { font-size:11px; color:#4d4; margin:6px 0 2px; letter-spacing:1px; }
+.taphead:first-child { margin-top:0; }
 </style>
 </head>
 <body>
@@ -35,10 +37,8 @@ td.good { color:#8f8; } td.bad { color:#f88; }
   <div id="controls">
     <button id="btnStart">▶ Start mic</button>
     <button id="btnStop">■ Stop</button>
-    <button id="btnCap" disabled>⏺ Capture 3s tap</button>
-    <button id="btnSelf">🔧 Self-test (no mic)</button>
-    <button id="btnDiag">🩺 Diagnose mic</button>
-    <span id="status">Ready — transplant f1</span>
+    <button id="btnCap" disabled>⏺ Capture now (3 s)</button>
+    <span id="status">Ready — press Start, then just tap the spring</span>
   </div>
   <div id="dims">
     <label>Length mm</label><input type="number" id="inL" value="210" step="0.1">
@@ -52,22 +52,19 @@ td.good { color:#8f8; } td.bad { color:#f88; }
   </div>
   <div id="pred"></div>
   <div id="canvas-wrap"><canvas id="canvas"></canvas></div>
-  <div id="result"><span class="dim">Capture a tap (or run self-test) to see measured peaks vs predictions + decay.</span><div id="diag" class="dim"></div></div>
+  <div id="result"><span class="dim">Press Start, then just tap the spring — each tap is captured automatically. Peaks vs the four predicted bending modes appear here.</span></div>
   <div id="build">spring-tap transplant f1 · 2026-10-14</div>
 </div>
 <script>
 const FFT_SIZE = 4096;
 const FPS = 30;
 // predictions
-const BETA = { ff:[4.7300408,7.8532046,10.9956079], cant:[1.8751041,4.6940911,7.8547574] };
+const BETA = { ff:[4.7300408,7.8532046,10.9956079,14.1371655], cant:[1.8751041,4.6940911,7.8547574,10.9955407] };
 // explicit element handles (same pattern as proven tuner)
 const btnStart = document.getElementById('btnStart');
 const btnStop = document.getElementById('btnStop');
 const btnCap = document.getElementById('btnCap');
-const btnSelf = document.getElementById('btnSelf');
-const btnDiag = document.getElementById('btnDiag');
 const statusEl = document.getElementById('status');
-const diagEl = document.getElementById('diag');
 const predEl = document.getElementById('pred');
 const resultEl = document.getElementById('result');
 const inL = document.getElementById('inL'), inW = document.getElementById('inW'),
@@ -95,7 +92,8 @@ let running = false, frames = [], animId = null, lastFrameTime = 0;
 let canvasW = 0, canvasH = 0, sampleRate = 44100, binWidth = 0;
 let smoothBuf = null, livePeaks = [], micLevelDb = -999, micTimeBuf = null;
 let silentFrames = 0, lastLive = null;
-let capturing = false, capStart = 0;
+let capturing = false, capStart = 0, tapNo = 0;
+let noiseFloor = -999, lastTapAt = 0;
 
 async function startAudio() {
   try {
@@ -212,6 +210,7 @@ function showPred(){
   const dens = p.hasMass ? (p.rho.toFixed(0)+' kg/m³ (weighed)') : (p.rho.toFixed(0)+' kg/m³ (ASSUMED — weigh a spring!)');
   predEl.innerHTML =
     'Predicted f1 <b>'+p.f[0].toFixed(0)+'</b> · f2 <b>'+p.f[1].toFixed(0)+'</b> · f3 <b>'+p.f[2].toFixed(0)+
+    '</b> · f4 <b>'+p.f[3].toFixed(0)+
     '</b> · width f1 <b>'+p.fW.toFixed(0)+'</b> Hz &nbsp; <span class="dim">ρ '+dens+' · E from measurement: E = E_nom × (f_meas/f_pred)²</span>';
   return p;
 }
@@ -262,13 +261,19 @@ function render(now){
   if(running){
     const raw = capture();
     if(raw) onNewFrame(raw);
+    // hands-free: a tap is a fast rise over the room-noise floor, so capture it automatically
+    if(noiseFloor === -999) noiseFloor = micLevelDb;
+    if(!capturing){
+      if(micLevelDb > noiseFloor + 12 && micLevelDb > -50 && now - lastTapAt > 3500) startCapture();
+      else if(micLevelDb < noiseFloor + 6) noiseFloor = Math.min(micLevelDb, noiseFloor + 0.4);
+    }
     // loud, unmistakable proof of whether audio is actually arriving — written only on change
     // so it cannot clobber the Capture / analysed messages
     const live = micLevelDb > -60;
     silentFrames = live ? 0 : silentFrames + 1;
     if(live && lastLive !== true){
       lastLive = true;
-      if(!capturing) statusEl.textContent = 'MIC LIVE — audio arriving ('+Math.round(micLevelDb)+' dB). Tap the spring, then Capture.';
+      if(!capturing) statusEl.textContent = 'MIC LIVE — audio arriving ('+Math.round(micLevelDb)+' dB). Just tap the spring.';
     } else if(!live && silentFrames === 61){
       lastLive = false;
       if(!capturing) statusEl.textContent = 'MIC LIVE but SILENT ('+Math.round(micLevelDb)+' dB) — mic is open, no sound reaching the page. Wrong input device, muted mic, or browser focus elsewhere.';
@@ -294,29 +299,47 @@ function fitDecay(slice, freq){
   if(!(slope < -1)) return null;   // a steady tone or noise fits ~0 dB/s: not a ring-down
   return { slope, t60:60/Math.abs(slope) };
 }
+function startCapture(){
+  if(!running || capturing) return;
+  capturing = true; capStart = frames.length; lastTapAt = performance.now();
+  statusEl.textContent = 'TAP — recording 3 s…';
+  setTimeout(()=>{
+    capturing = false;
+    analyse(frames.slice(capStart, capStart+90), calcPred());
+  }, 3000);
+}
 function analyse(slice, p){
-  if(!slice || slice.length<10){ statusEl.textContent = 'Nothing captured.'; return; }
-  const skip = Math.min(5, Math.floor(slice.length/10));
-  const n = slice[0].length, avg = new Float32Array(n);
-  let cnt = 0;
-  for(let i=skip;i<slice.length;i++){ for(let j=0;j<n;j++) avg[j]+=slice[i][j]; cnt++; }
-  for(let j=0;j<n;j++) avg[j]/=cnt;
-  const pkList = findSpringPeaks(avg, -80).slice(0,6);
-  statusEl.textContent = 'Captured '+slice.length+' frames. Tap analysed.';
-  let html = '<table><tr><th>Measured Hz</th><th>dB</th><th>Nearest pred</th><th>ΔHz</th><th>E est (GPa)</th></tr>';
-  pkList.forEach((pk,i)=>{
+  if(!slice || slice.length<10){ statusEl.textContent = 'Nothing captured — no sound above the room noise.'; return; }
+  // PEAK HOLD, not an average: high modes die in a fraction of a second, so averaging the
+  // whole 3 s buries mode 3 and 4 under the silence that follows them.
+  const n = slice[0].length, hold = new Float32Array(n).fill(-120);
+  for(const fr of slice){ for(let j=0;j<n;j++){ if(fr[j] > hold[j]) hold[j] = fr[j]; } }
+  const pkList = findSpringPeaks(hold, -80).slice(0,8);
+  if(!pkList.length){ statusEl.textContent = 'Captured '+slice.length+' frames but no peaks — tap harder or hold the mic closer.'; return; }
+  tapNo++;
+  const f1 = p.f[0];
+  let html = '<div class="taphead">Tap '+tapNo+'</div><table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
+  let strongest = pkList[0];
+  pkList.forEach(pk=>{
     let bi=0, bd=1e9;
     p.f.forEach((f,j)=>{ const d=Math.abs(pk.freq-f); if(d<bd){bd=d;bi=j;} });
     const fP=p.f[bi], eEst=(p.E1/1e9)*(pk.freq/fP)*(pk.freq/fP);
-    const cls = bd/fP<0.03 ? 'good' : (bd/fP<0.08 ? '' : 'bad');
-    html += '<tr><td class="peakline">'+pk.freq.toFixed(1)+'</td><td>'+pk.db.toFixed(0)+'</td><td>p'+(bi+1)+' '+fP.toFixed(0)+'</td><td class="'+cls+'">'+bd.toFixed(1)+'</td><td>'+eEst.toFixed(1)+'</td></tr>';
-    if(i===0){
-      const dec = fitDecay(slice, pk.freq);
-      html += '<tr><td colspan="5" style="text-align:left">Decay of strongest: '+(dec ? dec.slope.toFixed(1)+' dB/s → T60 ≈ '+dec.t60.toFixed(2)+' s' : 'could not fit (too short/noisy)')+'</td></tr>';
-    }
+    const pct = 100*bd/fP, cls = pct<3 ? 'good' : (pct<8 ? '' : 'bad');
+    // anything well below f1 is the spring rocking on its supports / handling noise, not a bending mode
+    const axial = pk.freq < f1*0.7;
+    html += '<tr><td class="peakline">'+pk.freq.toFixed(1)+'</td><td>'+pk.db.toFixed(0)+'</td><td>'+
+      (axial ? 'below f1' : 'p'+(bi+1))+'</td><td class="'+cls+'">'+bd.toFixed(1)+'</td><td class="'+cls+'">'+pct.toFixed(1)+'</td><td>'+
+      (axial ? '—' : eEst.toFixed(1))+'</td></tr>';
   });
-  html += '</table><div class="dim">Green Δ = within 3% of prediction. E est uses nearest mode.</div>';
-  resultEl.innerHTML = html + '<div id="diag" class="dim"></div>';
+  html += '</table>';
+  const dec = fitDecay(slice, strongest.freq);
+  html += '<div class="dim">Decay of the loudest peak ('+strongest.freq.toFixed(0)+' Hz): '+
+    (dec ? dec.slope.toFixed(1)+' dB/s · T60 ≈ '+dec.t60.toFixed(2)+' s' : 'not measurable')+
+    ' — this is damping (ring-down), NOT modulus. E comes only from the frequencies.</div>';
+  if(tapNo===1) resultEl.innerHTML = '';
+  resultEl.insertAdjacentHTML('beforeend', html);
+  resultEl.scrollTop = resultEl.scrollHeight;
+  statusEl.textContent = 'Tap '+tapNo+' captured — '+pkList.length+' peaks. Tap again whenever you like.';
 }
 // buttons
 btnStart.addEventListener('click', async ()=>{
@@ -328,69 +351,14 @@ btnStart.addEventListener('click', async ()=>{
   running = true;
   requestWake();
   btnCap.disabled = false;
-  statusEl.textContent = 'MIC LIVE — listening. Tap the spring, then Capture.';
+  statusEl.textContent = 'MIC LIVE — listening. Just tap the spring; each tap is captured automatically.';
 });
 btnStop.addEventListener('click', ()=>{
   running = false; capturing = false; stopAudio(); releaseWake();
   btnCap.disabled = true;
   statusEl.textContent = 'Mic off.';
 });
-btnCap.addEventListener('click', ()=>{
-  if(!running || capturing) return;
-  capturing = true; capStart = frames.length;
-  statusEl.textContent = 'Capturing 3s — TAP NOW!';
-  setTimeout(()=>{
-    capturing = false;
-    analyse(frames.slice(capStart, capStart+120), calcPred());
-  }, 3000);
-});
-btnSelf.addEventListener('click', ()=>{
-  try{
-    if(!binWidth) binWidth = (sampleRate||48000)/FFT_SIZE;
-    const N = FFT_SIZE/2;
-    for(let r=0;r<90;r++){
-      const fr = new Float32Array(N).fill(-90);
-      const dec = Math.pow(10, (-20*(r/FPS))/20);
-      const atk = Math.max(0, 1-r/6);
-      const b = Math.round(460/binWidth);
-      const lvl = -45 + 20*Math.log10(Math.max(dec,1e-6));
-      for(let d=-3;d<=3;d++){ fr[b+d] = Math.max(fr[b+d], lvl-Math.abs(d)*6); }
-      fr[Math.round(1269/binWidth)] = Math.max(fr[Math.round(1269/binWidth)], lvl-12);
-      if(atk>0.05){ for(let i=Math.floor(500/binWidth);i<Math.floor(4000/binWidth);i+=7) fr[i] = Math.max(fr[i], -70+20*Math.log10(atk)); }
-      onNewFrame(fr);
-    }
-    statusEl.textContent = 'Self-test: synthetic tap analysed (no mic involved).';
-    analyse(frames.slice(-90), calcPred());
-  }catch(err){ statusEl.textContent = 'Self-test err: '+err.message; }
-});
-btnDiag.addEventListener('click', async ()=>{
-  const L = [];
-  try{
-    L.push('URL: '+location.href.split('?')[0]);
-    L.push('secure: '+window.isSecureContext);
-    L.push('mediaDevices: '+!!(navigator.mediaDevices));
-    L.push('getUserMedia: '+!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia));
-    if(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices){
-      const devs = await navigator.mediaDevices.enumerateDevices();
-      const mics = devs.filter(d=>d.kind==='audioinput');
-      L.push('mic devices seen: '+mics.length);
-      mics.slice(0,5).forEach((m,i)=>L.push('mic'+i+': '+(m.label||'(label hidden — permission not granted yet)')));
-    } else L.push('enumerateDevices: missing');
-    if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
-      try{
-        const s = await navigator.mediaDevices.getUserMedia({audio:true});
-        const tr = s.getTracks()[0];
-        L.push('getUserMedia: OK ('+(tr.label||'no label')+')');
-        s.getTracks().forEach(t=>{try{t.stop();}catch(_){}});
-      }catch(e){ L.push('getUserMedia: '+((e&&(e.name+': '+e.message))||e)); }
-    }
-    try{ const AC = window.AudioContext||window.webkitAudioContext; const ac = new AC(); L.push('AudioContext: '+ac.state+' @ '+ac.sampleRate+'Hz'); ac.close(); }
-    catch(e){ L.push('AudioContext: '+e.message); }
-  }catch(e){ L.push('diag crashed: '+e.message); }
-  const liveDiag = document.getElementById('diag');
-  if(liveDiag) liveDiag.innerHTML = L.map(x=>x.replace(/</g,'&lt;')).join('<br>');
-  statusEl.textContent = 'Diagnosis printed in the result panel.';
-});
+btnCap.addEventListener('click', startCapture);
 for(const el of [inL,inW,inT,inM,inE1,inE2,inB]) el.addEventListener('change', showPred);
 // surface JS errors in status (same as proven tuner)
 window.addEventListener('error', (e)=>{ try{ statusEl.textContent = 'JS err: '+(e.message||'unknown'); }catch(_){} });
