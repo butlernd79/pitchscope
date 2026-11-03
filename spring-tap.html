@@ -361,9 +361,12 @@ function analyse(slice, p){
     const pct = 100*bd/fP, cls = pct<3 ? 'good' : (pct<8 ? '' : 'bad');
     // anything well below f1 is the spring rocking on its supports / handling noise, not a bending mode
     const axial = pk.freq < f1*0.7;
+    // more than 10% off every predicted mode is not that mode — refuse to invent an E for it
+    const label = axial ? 'below f1' : (pct > 10 ? '—' : 'p'+(bi+1));
+    const showE = !axial && pct <= 10;
     html += '<tr><td class="peakline">'+pk.freq.toFixed(1)+'</td><td>'+pk.db.toFixed(0)+'</td><td>'+
-      (axial ? 'below f1' : 'p'+(bi+1))+'</td><td class="'+cls+'">'+bd.toFixed(1)+'</td><td class="'+cls+'">'+pct.toFixed(1)+'</td><td>'+
-      (axial ? '—' : eEst.toFixed(1))+'</td></tr>';
+      label+'</td><td class="'+cls+'">'+bd.toFixed(1)+'</td><td class="'+cls+'">'+pct.toFixed(1)+'</td><td>'+
+      (showE ? eEst.toFixed(1) : '—')+'</td></tr>';
   });
   html += '</table>';
   const dec = fitDecay(slice, strongest.freq);
