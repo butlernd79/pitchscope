@@ -95,7 +95,7 @@ let smoothBuf = null, livePeaks = [], micLevelDb = -999, micTimeBuf = null;
 let silentFrames = 0, lastLive = null;
 let tapNo = 0, session = null;               // session = {endsAt, taps}
 let lastTapAt = 0, prevLvl = -999, floorDb = -999, lastResultAt = 0;
-let envBuf = null, envPeaks = [];
+let envBuf = null;
 const SESSION_MS = 5000;                     // one session = 5 s of tapping, as many places as you like
 
 async function startAudio() {
@@ -199,7 +199,6 @@ function onNewFrame(raw){
   }
   const spec = smoothSpectrum(raw);
   livePeaks = findSpringPeaks(spec, -80);
-  envPeaks = envBuf ? findSpringPeaks(envBuf, -80) : [];
   frames.push(raw);
   if(frames.length > 3600) frames.shift();
   return livePeaks;
@@ -251,12 +250,20 @@ function drawSpectrum(){
       i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
     }
     ctx.stroke();
+    // flags sit on the strongest bin inside each prediction window — the same rule the
+    // table uses, so the picture and the numbers can never disagree again
     ctx.fillStyle = '#ff0'; ctx.textBaseline = 'bottom';
-    for(const pk of envPeaks.slice(0,6)){
-      const x = pk.freq/8000*canvasW;
+    p.f.forEach(fp=>{
+      const bw = binWidth || 11.7;
+      const lo = Math.max(3, Math.floor(fp*0.90/bw));
+      const hi = Math.min(envBuf.length-4, Math.ceil(fp*1.10/bw));
+      let bi = -1, best = -999;
+      for(let i=lo;i<=hi;i++){ if(envBuf[i] > best){ best = envBuf[i]; bi = i; } }
+      if(bi < 0) return;
+      const x = (bi*bw)/8000*canvasW;
       ctx.fillRect(x-1, canvasH-60, 2, 60);
-      ctx.fillText(pk.freq.toFixed(0), x+3, canvasH-62);
-    }
+      ctx.fillText((bi*bw).toFixed(0), x+3, canvasH-62);
+    });
   }
   if(smoothBuf && running){
     ctx.strokeStyle = '#888'; ctx.lineWidth = 1; ctx.beginPath();
@@ -319,7 +326,6 @@ function startSession(firstIsTap){
   // seed from the frame the tap just landed in, otherwise the first tap of the session is lost
   const last = frames.length ? frames[frames.length-1] : null;
   envBuf = last ? Float32Array.from(last) : null;
-  envPeaks = [];
   session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0, startIdx: frames.length };
 }
 function endSession(){
@@ -347,53 +353,71 @@ function fitDecay(slice, freq){
   return { slope, t60: 60/Math.abs(slope), zeta, Q: 1/(2*zeta) };
 }
 function analyse(spec, taps, decaySlice){
-  const all = findSpringPeaks(spec, -80);
-  if(!all.length){ statusEl.textContent = 'No peaks found — tap harder or move the mic closer.'; return; }
   const p = calcPred(), f1 = p.f[0];
-  // match every peak first: a mode is a mode whatever its level, so never let a dB cut hide one
-  const rows = all.map(pk=>{
-    let bi=0, bd=1e9;
-    p.f.forEach((f,j)=>{ const d=Math.abs(pk.freq-f); if(d<bd){bd=d;bi=j;} });
-    const fP=p.f[bi], pct=100*bd/fP;
-    const axial = pk.freq < f1*0.7;                    // support/hand rocking, not a bending mode
-    const isMode = !axial && pct <= 8;                 // within 8% of a prediction = that mode
-    return {freq:pk.freq, db:pk.db, bi, bd, pct, axial, isMode,
-            eEst:(p.E1/1e9)*(pk.freq/fP)*(pk.freq/fP)};
+  const modeRows = [], missing = [];
+  // SEARCH FOR EACH PREDICTED MODE instead of hunting local maxima. A broad hump fails
+  // every peak-picking rule (no strict maximum, little local prominence) yet is obviously
+  // a mode on screen — Nigel's p4. So take the strongest bin within +/-10% of each
+  // prediction and only ask whether it stands clear of that window's own shoulders.
+  p.f.forEach((fp, j)=>{
+    const lo = Math.max(3, Math.floor(fp*0.90/binWidth));
+    const hi = Math.min(spec.length-4, Math.ceil(fp*1.10/binWidth));
+    let bi = -1, best = -999;
+    for(let i=lo;i<=hi;i++){ if(spec[i] > best){ best = spec[i]; bi = i; } }
+    const shoulder = Math.min(spec[lo], spec[hi]);
+    if(bi < 0 || best < -78 || (best - shoulder) < 6){ missing.push(j+1); return; }
+    // if the window holds several local maxima, take the one NEAREST the prediction
+    // among those within 3 dB of the window maximum (a side peak must not hijack the mode)
+    let near = bi;
+    for(let i=lo+1;i<hi;i++){
+      if(spec[i] >= spec[i-1] && spec[i] >= spec[i+1] && spec[i] > best - 3 &&
+         Math.abs(i - Math.round(fp/binWidth)) < Math.abs(near - Math.round(fp/binWidth))) near = i;
+    }
+    bi = near;
+    const y1=spec[bi-1], y2=spec[bi], y3=spec[bi+1], den=2*y2-y1-y3;
+    let off = den > 0 ? (y3-y1)/(2*den) : 0;
+    if(!isFinite(off) || Math.abs(off) > 0.5) off = 0;
+    const freq = (bi+off)*binWidth;
+    modeRows.push({freq, db:y2, mode:j+1, bd:Math.abs(freq-fp), pct:100*Math.abs(freq-fp)/fp,
+                   eEst:(p.E1/1e9)*(freq/fp)*(freq/fp), isMode:true});
   });
-  // two peaks can land near the same prediction: keep only the closest as that mode
-  const best = {};
-  rows.forEach(r=>{ if(r.isMode && (best[r.bi] === undefined || r.pct < best[r.bi].pct)) best[r.bi] = r; });
-  rows.forEach(r=>{ if(r.isMode && best[r.bi] !== r) r.isMode = false; });
-  const modes = rows.filter(r=>r.isMode);
-  const topDb = rows.reduce((m,r)=>Math.max(m,r.db), -120);
-  const others = rows.filter(r=>!r.isMode && r.db > topDb - 12).sort((a,b)=>b.db-a.db).slice(0,3);  // prominent, unexplained only
-  const show = modes.concat(others).sort((a,b)=>a.freq-b.freq);                // strength first, THEN order
+  // anything prominent that is NOT inside a mode window: show up to 3, labelled for what it is
+  const others = findSpringPeaks(spec, -80)
+    .filter(k=>!p.f.some(fp=>Math.abs(k.freq-fp)/fp < 0.12))
+    .map(k=>({freq:k.freq, db:k.db, bd:null, pct:null, isMode:false, axial:k.freq < f1*0.7}))
+    .slice(0,3);
+  const show = modeRows.concat(others).sort((a,b)=>a.freq-b.freq);
   tapNo++;
-  let html = '<div class="taphead">Session '+tapNo+' · '+taps+' tap'+(taps===1?'':'s')+' · max envelope</div>'+
-    '<table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
-  show.forEach(r=>{
-    const cls = r.pct<3 ? 'good' : (r.pct<8 ? '' : 'bad');
-    const label = r.axial ? 'below f1' : (r.isMode ? 'p'+(r.bi+1) : '—');
-    html += '<tr><td class="peakline">'+r.freq.toFixed(1)+'</td><td>'+r.db.toFixed(0)+'</td><td>'+label+
-      '</td><td class="'+cls+'">'+r.bd.toFixed(1)+'</td><td class="'+cls+'">'+r.pct.toFixed(1)+'</td><td>'+
-      (r.isMode ? r.eEst.toFixed(1) : '—')+'</td></tr>';
-  });
-  html += '</table>';
+  let html = '<div class="taphead">Session '+tapNo+' · '+taps+' tap'+(taps===1?'':'s')+' · max envelope</div>';
+  if(show.length){
+    html += '<table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
+    show.forEach(r=>{
+      const cls = r.pct === null ? '' : (r.pct<3 ? 'good' : (r.pct<8 ? '' : 'bad'));
+      const label = r.axial ? 'below f1' : (r.isMode ? 'p'+r.mode : '—');
+      html += '<tr><td class="peakline">'+r.freq.toFixed(1)+'</td><td>'+r.db.toFixed(0)+'</td><td>'+label+'</td>'+
+        '<td class="'+cls+'">'+(r.bd === null ? '—' : r.bd.toFixed(1))+'</td>'+
+        '<td class="'+cls+'">'+(r.pct === null ? '—' : r.pct.toFixed(1))+'</td>'+
+        '<td>'+(r.isMode && r.pct <= 8 ? r.eEst.toFixed(1) : '—')+'</td></tr>';
+    });
+    html += '</table>';
+  }
+  if(missing.length) html += '<div class="dim">No response at p'+missing.join(', p')+
+    ' — that mode was not excited (or the tap missed it). Nothing is hidden: an unmatched peak still shows as “—”.</div>';
   // damping: one ring-down, per mode — ζ and Q from the decay slope (no half-power bandwidth needed)
   if(decaySlice && decaySlice.length >= 8){
     const parts = [];
-    modes.forEach(r=>{
+    modeRows.forEach(r=>{
       const d = fitDecay(decaySlice, r.freq);
-      if(d) parts.push('p'+(r.bi+1)+': T60 '+d.t60.toFixed(2)+' s · Q '+(d.Q>999?Math.round(d.Q):d.Q.toFixed(0)));
+      if(d) parts.push('p'+r.mode+': T60 '+d.t60.toFixed(2)+' s · Q '+(d.Q>999?Math.round(d.Q):d.Q.toFixed(0)));
     });
     if(parts.length) html += '<div class="dim">Damping from this single ring-down — '+parts.join(' · ')+'</div>';
   }
-  html += '<div class="dim">Blue envelope keeps the strongest level each mode reached at ANY tap position. A row is called a mode only within 8% of a prediction; E comes from frequency alone.</div>';
+  html += '<div class="dim">Each mode is the strongest response within ±10% of its prediction, whatever its level. E comes from frequency alone.</div>';
   if(tapNo===1) resultEl.innerHTML = '';
   resultEl.insertAdjacentHTML('beforeend', html);
   resultEl.scrollTop = resultEl.scrollHeight;
   lastResultAt = performance.now();
-  statusEl.textContent = 'Session '+tapNo+' saved — '+modes.length+' mode'+(modes.length===1?'':'s')+' from '+taps+' tap'+(taps===1?'':'s')+'. Blue trace stays; tap again for the next spring.';
+  statusEl.textContent = 'Session '+tapNo+' saved — '+modeRows.length+' of 4 modes found from '+taps+' tap'+(taps===1?'':'s')+'.';
 }
 // buttons
 btnStart.addEventListener('click', async ()=>{
@@ -417,7 +441,7 @@ btnCap.addEventListener('click', ()=>startSession(false));
 document.getElementById('btnClear').addEventListener('click', ()=>{
   if(!confirm('Clear all sessions and the blue envelope?')) return;
   tapNo = 0; resultEl.innerHTML = '<span class="dim">Cleared — tap the spring when ready.</span>';
-  envBuf = null; envPeaks = []; livePeaks = [];
+  envBuf = null; livePeaks = [];
   statusEl.textContent = 'Cleared.';
 });
 for(const el of [inL,inW,inT,inM,inE1,inE2,inB]) el.addEventListener('change', showPred);
