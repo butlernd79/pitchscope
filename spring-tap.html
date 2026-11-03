@@ -37,7 +37,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
   <div id="controls">
     <button id="btnStart">▶ Start mic</button>
     <button id="btnStop">■ Stop</button>
-    <button id="btnCap" disabled>⏺ Capture now</button>
+    <button id="btnCap" disabled>⏺ Record 5 s</button>
     <button id="btnClear">✕ Clear log</button>
     <span id="status">Ready — press Start, then just tap the spring</span>
   </div>
@@ -53,7 +53,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
   </div>
   <div id="pred"></div>
   <div id="canvas-wrap"><canvas id="canvas"></canvas></div>
-  <div id="result"><span class="dim">Press Start, then just tap the spring — each tap is captured automatically. Peaks vs the four predicted bending modes appear here.</span></div>
+  <div id="result"><span class="dim">Press Start, then tap the spring as many times as you like — 5 seconds of tapping becomes ONE result, keeping the strongest level every mode reached.</span></div>
   <div id="build">spring-tap transplant f1 · 2026-10-14</div>
 </div>
 <script>
@@ -93,9 +93,10 @@ let running = false, frames = [], animId = null, lastFrameTime = 0;
 let canvasW = 0, canvasH = 0, sampleRate = 44100, binWidth = 0;
 let smoothBuf = null, livePeaks = [], micLevelDb = -999, micTimeBuf = null;
 let silentFrames = 0, lastLive = null;
-let pending = 0, tapNo = 0, jobs = [];
-let lastTapAt = 0, prevLvl = -999, floorDb = -999;
-let holdBuf = null, holdPeaks = [];
+let tapNo = 0, session = null;               // session = {endsAt, taps}
+let lastTapAt = 0, prevLvl = -999, floorDb = -999, lastResultAt = 0;
+let envBuf = null, envPeaks = [];
+const SESSION_MS = 5000;                     // one session = 5 s of tapping, as many places as you like
 
 async function startAudio() {
   try {
@@ -190,13 +191,15 @@ function updateMicLevel(){
 }
 function onNewFrame(raw){
   updateMicLevel();
-  // slow-decay peak hold: the ring-down dies in ~1 s, so hold the envelope on screen
-  // (0.15 dB per frame ≈ 4.5 dB/s — visible for several seconds, then clears itself)
-  if(!holdBuf || holdBuf.length !== raw.length){ holdBuf = Float32Array.from(raw); }
-  else { for(let i=0;i<raw.length;i++){ const d = holdBuf[i] - 0.15; holdBuf[i] = raw[i] > d ? raw[i] : d; } }
+  // MAX ENVELOPE, no decay: the highest level every bin reaches during the session, so
+  // tapping in several places accumulates every mode at its strongest.
+  if(session){
+    if(!envBuf || envBuf.length !== raw.length){ envBuf = new Float32Array(raw.length).fill(-120); }
+    for(let i=0;i<raw.length;i++){ if(raw[i] > envBuf[i]) envBuf[i] = raw[i]; }
+  }
   const spec = smoothSpectrum(raw);
   livePeaks = findSpringPeaks(spec, -80);
-  holdPeaks = findSpringPeaks(holdBuf, -80);
+  envPeaks = envBuf ? findSpringPeaks(envBuf, -80) : [];
   frames.push(raw);
   if(frames.length > 3600) frames.shift();
   return livePeaks;
@@ -238,18 +241,24 @@ function drawSpectrum(){
     ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvasH); ctx.stroke();
     ctx.fillStyle = '#0f0'; ctx.fillText('p'+(i+1)+' '+f.toFixed(0), x+3, 2+i*13);
   });
-  if(smoothBuf){
-    // held envelope first (blue), so the tap's modes stay on screen after the ring dies
-    if(holdBuf){
-      ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1.5; ctx.beginPath();
-      const NH = Math.min(holdBuf.length, Math.floor(8000/(binWidth||11.7)));
-      for(let i=0;i<NH;i++){
-        const x = i/NH*canvasW;
-        const y = canvasH - ((holdBuf[i]+120)/110)*canvasH;
-        i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
-      }
-      ctx.stroke();
+  if(envBuf){
+    // blue = max envelope, survives Stop and stays on screen until the next session
+    ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1.5; ctx.beginPath();
+    const NH = Math.min(envBuf.length, Math.floor(8000/(binWidth||11.7)));
+    for(let i=0;i<NH;i++){
+      const x = i/NH*canvasW;
+      const y = canvasH - ((envBuf[i]+120)/110)*canvasH;
+      i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
     }
+    ctx.stroke();
+    ctx.fillStyle = '#ff0'; ctx.textBaseline = 'bottom';
+    for(const pk of envPeaks.slice(0,6)){
+      const x = pk.freq/8000*canvasW;
+      ctx.fillRect(x-1, canvasH-60, 2, 60);
+      ctx.fillText(pk.freq.toFixed(0), x+3, canvasH-62);
+    }
+  }
+  if(smoothBuf && running){
     ctx.strokeStyle = '#888'; ctx.lineWidth = 1; ctx.beginPath();
     const N = Math.min(smoothBuf.length, Math.floor(8000/(binWidth||11.7)));
     for(let i=0;i<N;i++){
@@ -258,13 +267,8 @@ function drawSpectrum(){
       i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
     }
     ctx.stroke();
-    ctx.fillStyle = '#ff0'; ctx.textBaseline = 'bottom';
-    for(const pk of holdPeaks.slice(0,6)){
-      const x = pk.freq/8000*canvasW;
-      ctx.fillRect(x-1, canvasH-60, 2, 60);
-      ctx.fillText(pk.freq.toFixed(0), x+3, canvasH-62);
-    }
-  } else {
+  }
+  if(!envBuf){
     ctx.fillStyle = '#444'; ctx.textBaseline = 'middle';
     ctx.fillText(running ? 'listening…' : 'press Start mic', 12, canvasH/2);
   }
@@ -283,77 +287,56 @@ function render(now){
     // (Floor ignores the rise; the rise test ignores the decay tail — that combination is
     // what lets several taps follow each other quickly without false triggers.)
     if(floorDb === -999) floorDb = micLevelDb;
-    if(micLevelDb > floorDb + 12 && micLevelDb > -55 && micLevelDb > prevLvl + 6 && now - lastTapAt > 300){
+    if(micLevelDb > floorDb + 12 && micLevelDb > -55 && micLevelDb > prevLvl + 6 && now - lastTapAt > 250){
       lastTapAt = now;
-      startCapture();
+      if(!session) startSession(true);      // first tap opens a 5 s session…
+      else session.taps++;                  // …later taps just add to the same envelope
     }
     prevLvl = micLevelDb;
     floorDb = Math.min(micLevelDb, floorDb + 0.3);
+    if(session){
+      const left = Math.max(0, (session.endsAt - now)/1000);
+      statusEl.textContent = 'Recording — '+left.toFixed(1)+' s left · '+session.taps+' tap'+(session.taps===1?'':'s')+' · tap anywhere on the spring';
+      if(left <= 0) endSession();
+    }
     // loud, unmistakable proof of whether audio is actually arriving — written only on change
     // so it cannot clobber the Capture / analysed messages
     const live = micLevelDb > -60;
     silentFrames = live ? 0 : silentFrames + 1;
     if(live && lastLive !== true){
       lastLive = true;
-      if(!pending) statusEl.textContent = 'MIC LIVE — audio arriving ('+Math.round(micLevelDb)+' dB). Just tap the spring.';
+      if(!session && now - lastResultAt > 3000) statusEl.textContent = 'MIC LIVE — audio arriving ('+Math.round(micLevelDb)+' dB). Just tap the spring.';
     } else if(!live && silentFrames === 61){
       lastLive = false;
-      if(!pending) statusEl.textContent = 'MIC LIVE but SILENT ('+Math.round(micLevelDb)+' dB) — mic is open, no sound reaching the page. Wrong input device, muted mic, or browser focus elsewhere.';
+      if(!session && now - lastResultAt > 3000) statusEl.textContent = 'MIC LIVE but SILENT ('+Math.round(micLevelDb)+' dB) — mic is open, no sound reaching the page. Wrong input device, muted mic, or browser focus elsewhere.';
     }
   }
   drawSpectrum();
 }
-// capture + analysis
-function fitDecay(slice, freq){
-  const bin = Math.round(freq/binWidth);
-  const pts = [];
-  slice.forEach((fr,i)=>{
-    let m = -120;
-    for(let d=-2;d<=2;d++){ const v=fr[bin+d]; if(v>m) m=v; }
-    pts.push([i/FPS, m]);
-  });
-  let pk = 0; for(let i=1;i<pts.length;i++) if(pts[i][1]>pts[pk][1]) pk=i;
-  const seg = pts.slice(pk).filter(q=>q[1]>-95);
-  if(seg.length<5) return null;
-  const n=seg.length; let sx=0,sy=0,sxx=0,sxy=0;
-  for(const [x,y] of seg){ sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
-  const slope=(n*sxy-sx*sy)/(n*sxx-sx*sx);
-  if(!(slope < -1)) return null;   // a steady tone or noise fits ~0 dB/s: not a ring-down
-  return { slope, t60:60/Math.abs(slope) };
+// session capture + analysis
+function startSession(firstIsTap){
+  if(!running || session) return;
+  // seed from the frame the tap just landed in, otherwise the first tap of the session is lost
+  const last = frames.length ? frames[frames.length-1] : null;
+  envBuf = last ? Float32Array.from(last) : null;
+  envPeaks = [];
+  session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0 };
 }
-function startCapture(){
-  if(!running) return;
-  // A new tap ENDS the previous window, so quick successive taps do not contaminate each other.
-  // Whatever is still open is analysed against the frames it actually had.
-  finaliseAll();
-  const job = { start: frames.length, done: false };
-  job.timer = setTimeout(()=>finalise(job), 1500);   // full 1.5 s if no further tap
-  jobs.push(job); pending = jobs.length;
-  statusEl.textContent = 'TAP — listening for the ring-down…';
+function endSession(){
+  if(!session) return;
+  const taps = session.taps; session = null;
+  if(!envBuf){ statusEl.textContent = 'Nothing captured.'; return; }
+  analyse(envBuf, taps);
 }
-function finalise(job){
-  if(!job || job.done) return;
-  job.done = true; clearTimeout(job.timer);
-  jobs = jobs.filter(j=>j !== job); pending = jobs.length;
-  const slice = frames.slice(job.start, Math.min(job.start+45, frames.length));
-  if(slice.length < 5) return;                      // too short to be a tap — ignore
-  analyse(slice, calcPred());
-}
-function finaliseAll(){ jobs.slice().forEach(finalise); }
-function analyse(slice, p){
-  if(!slice || slice.length<5){ statusEl.textContent = 'Nothing captured — no sound above the room noise.'; return; }
-  // PEAK HOLD, not an average: high modes die in a fraction of a second, so averaging the
-  // whole 3 s buries mode 3 and 4 under the silence that follows them.
-  const n = slice[0].length, hold = new Float32Array(n).fill(-120);
-  for(const fr of slice){ for(let j=0;j<n;j++){ if(fr[j] > hold[j]) hold[j] = fr[j]; } }
-  let pkList = findSpringPeaks(hold, -80);
+function analyse(spec, taps){
+  let pkList = findSpringPeaks(spec, -80);
   // anything 30 dB below the strongest peak in a tap spectrum is noise, not a mode
-  if(pkList.length) pkList = pkList.filter(k=>k.db > pkList[0].db - 30).slice(0,8);
-  if(!pkList.length){ statusEl.textContent = 'Captured '+slice.length+' frames but no peaks — tap harder or hold the mic closer.'; return; }
+  if(pkList.length) pkList = pkList.filter(k=>k.db > pkList[0].db - 20).slice(0,8);
+  if(!pkList.length){ statusEl.textContent = 'No peaks found — tap harder or move the mic closer.'; return; }
   tapNo++;
-  const f1 = p.f[0];
-  let html = '<div class="taphead">Tap '+tapNo+'</div><table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
-  let strongest = pkList[0];
+  const p = calcPred(); const f1 = p.f[0];
+  let html = '<div class="taphead">Session '+tapNo+' · '+taps+' tap'+(taps===1?'':'s')+' · max envelope</div>'+
+    '<table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
   pkList.forEach(pk=>{
     let bi=0, bd=1e9;
     p.f.forEach((f,j)=>{ const d=Math.abs(pk.freq-f); if(d<bd){bd=d;bi=j;} });
@@ -362,44 +345,43 @@ function analyse(slice, p){
     // anything well below f1 is the spring rocking on its supports / handling noise, not a bending mode
     const axial = pk.freq < f1*0.7;
     // more than 10% off every predicted mode is not that mode — refuse to invent an E for it
-    const label = axial ? 'below f1' : (pct > 10 ? '—' : 'p'+(bi+1));
-    const showE = !axial && pct <= 10;
+    const label = axial ? 'below f1' : (pct > 8 ? '—' : 'p'+(bi+1));
+    const showE = !axial && pct <= 8;
     html += '<tr><td class="peakline">'+pk.freq.toFixed(1)+'</td><td>'+pk.db.toFixed(0)+'</td><td>'+
       label+'</td><td class="'+cls+'">'+bd.toFixed(1)+'</td><td class="'+cls+'">'+pct.toFixed(1)+'</td><td>'+
       (showE ? eEst.toFixed(1) : '—')+'</td></tr>';
   });
   html += '</table>';
-  const dec = fitDecay(slice, strongest.freq);
-  html += '<div class="dim">Decay of the loudest peak ('+strongest.freq.toFixed(0)+' Hz): '+
-    (dec ? dec.slope.toFixed(1)+' dB/s · T60 ≈ '+dec.t60.toFixed(2)+' s' : 'not measurable')+
-    ' — this is damping (ring-down), NOT modulus. E comes only from the frequencies.</div>';
+  html += '<div class="dim">Envelope keeps the strongest level each mode reached at ANY tap position, so tapping along the spring builds one complete picture. E from the frequencies only.</div>';
   if(tapNo===1) resultEl.innerHTML = '';
   resultEl.insertAdjacentHTML('beforeend', html);
   resultEl.scrollTop = resultEl.scrollHeight;
-  statusEl.textContent = 'Tap '+tapNo+' captured — '+pkList.length+' peaks. Tap again whenever you like.';
+  lastResultAt = performance.now();
+  statusEl.textContent = 'Session '+tapNo+' saved — '+pkList.length+' peaks from '+taps+' taps. Blue trace stays; tap again for the next spring.';
 }
 // buttons
 btnStart.addEventListener('click', async ()=>{
-  if(running){ statusEl.textContent = 'Mic already live — tap ⏺ Capture (■ Stop to turn off).'; return; }
+  if(running){ statusEl.textContent = 'Mic already live — just tap the spring.'; return; }
   statusEl.textContent = 'Requesting mic...';
-  frames = []; smoothBuf = null;
+  frames = []; smoothBuf = null; session = null;
   const ok = await startAudio();
   if(!ok) return;
   running = true;
   requestWake();
   btnCap.disabled = false;
-  statusEl.textContent = 'MIC LIVE — listening. Just tap the spring; each tap is captured automatically.';
+  statusEl.textContent = 'MIC LIVE — tap the spring; each 5 s burst of tapping becomes one result.';
 });
 btnStop.addEventListener('click', ()=>{
-  running = false; jobs = []; pending = 0; holdBuf = null; holdPeaks = []; stopAudio(); releaseWake();
+  // deliberately keeps the blue envelope: you asked to be able to stop and still read it
+  running = false; session = null; stopAudio(); releaseWake();
   btnCap.disabled = true;
-  statusEl.textContent = 'Mic off.';
+  statusEl.textContent = envBuf ? 'Mic off — envelope still on screen; Clear log to wipe it.' : 'Mic off.';
 });
-btnCap.addEventListener('click', startCapture);
+btnCap.addEventListener('click', ()=>startSession(false));
 document.getElementById('btnClear').addEventListener('click', ()=>{
-  if(!confirm('Clear all taps and the held trace?')) return;
+  if(!confirm('Clear all sessions and the blue envelope?')) return;
   tapNo = 0; resultEl.innerHTML = '<span class="dim">Cleared — tap the spring when ready.</span>';
-  holdBuf = null; holdPeaks = []; livePeaks = [];
+  envBuf = null; envPeaks = []; livePeaks = [];
   statusEl.textContent = 'Cleared.';
 });
 for(const el of [inL,inW,inT,inM,inE1,inE2,inB]) el.addEventListener('change', showPred);
