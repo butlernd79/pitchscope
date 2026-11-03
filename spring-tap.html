@@ -94,6 +94,7 @@ document.addEventListener('visibilitychange', async ()=>{
 let running = false, frames = [], animId = null, lastFrameTime = 0;
 let canvasW = 0, canvasH = 0, sampleRate = 44100, binWidth = 0;
 let smoothBuf = null, livePeaks = [], micLevelDb = -999, micTimeBuf = null;
+let silentFrames = 0, lastLive = null;
 let capturing = false, capStart = 0;
 
 async function startAudio() {
@@ -102,7 +103,11 @@ async function startAudio() {
       statusEl.textContent = 'Mic needs the https page in Chrome/Safari (not a preview or in-app browser).';
       return false;
     }
-    stream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:true } });
+    // never hang silently: a pending prompt / absent mic must surface as an error
+    stream = await Promise.race([
+      navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:true } }),
+      new Promise((_, rej)=>setTimeout(()=>rej(new Error('No answer from the microphone after 12s — permission prompt still pending, or no working mic on this device.')), 12000))
+    ]);
     audioCtx = new AudioContext();
     sampleRate = audioCtx.sampleRate;
     source = audioCtx.createMediaStreamSource(stream);
@@ -116,7 +121,8 @@ async function startAudio() {
     source.connect(hpFilter); hpFilter.connect(analyser);
     binWidth = sampleRate / FFT_SIZE;
     smoothBuf = null;
-    if(audioCtx.state === 'suspended') await audioCtx.resume();
+    // do NOT await resume(): it can stay pending forever and silently freeze the whole start path
+    if(audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
     return true;
   } catch(e){
     const n = (e && e.name) || '';
@@ -256,6 +262,17 @@ function render(now){
   if(running){
     const raw = capture();
     if(raw) onNewFrame(raw);
+    // loud, unmistakable proof of whether audio is actually arriving — written only on change
+    // so it cannot clobber the Capture / analysed messages
+    const live = micLevelDb > -60;
+    silentFrames = live ? 0 : silentFrames + 1;
+    if(live && lastLive !== true){
+      lastLive = true;
+      if(!capturing) statusEl.textContent = 'MIC LIVE — audio arriving ('+Math.round(micLevelDb)+' dB). Tap the spring, then Capture.';
+    } else if(!live && silentFrames === 61){
+      lastLive = false;
+      if(!capturing) statusEl.textContent = 'MIC LIVE but SILENT ('+Math.round(micLevelDb)+' dB) — mic is open, no sound reaching the page. Wrong input device, muted mic, or browser focus elsewhere.';
+    }
   }
   drawSpectrum();
 }
@@ -274,7 +291,7 @@ function fitDecay(slice, freq){
   const n=seg.length; let sx=0,sy=0,sxx=0,sxy=0;
   for(const [x,y] of seg){ sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
   const slope=(n*sxy-sx*sy)/(n*sxx-sx*sx);
-  if(!(slope<0)) return null;
+  if(!(slope < -1)) return null;   // a steady tone or noise fits ~0 dB/s: not a ring-down
   return { slope, t60:60/Math.abs(slope) };
 }
 function analyse(slice, p){
