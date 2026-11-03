@@ -175,7 +175,7 @@ function findSpringPeaks(spec, floorDb){
   const kept=[];
   for(const c of out){
     if(kept.some(k=>Math.abs(c.freq-k.freq)/k.freq<0.03)) continue;
-    kept.push(c); if(kept.length>=8) break;
+    kept.push(c); if(kept.length>=16) break;
   }
   return kept;
 }
@@ -320,44 +320,80 @@ function startSession(firstIsTap){
   const last = frames.length ? frames[frames.length-1] : null;
   envBuf = last ? Float32Array.from(last) : null;
   envPeaks = [];
-  session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0 };
+  session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0, startIdx: frames.length };
 }
 function endSession(){
   if(!session) return;
-  const taps = session.taps; session = null;
+  const taps = session.taps, start = session.startIdx; session = null;
   if(!envBuf){ statusEl.textContent = 'Nothing captured.'; return; }
-  analyse(envBuf, taps);
+  // damping only means something on ONE ring-down — pass it only for a single-tap session
+  analyse(envBuf, taps, (taps === 1 && start >= 0) ? frames.slice(start, start+45) : null);
 }
-function analyse(spec, taps){
-  let pkList = findSpringPeaks(spec, -80);
-  // anything 30 dB below the strongest peak in a tap spectrum is noise, not a mode
-  if(pkList.length) pkList = pkList.filter(k=>k.db > pkList[0].db - 20).sort((a,b)=>a.freq-b.freq).slice(0,8);
-  if(!pkList.length){ statusEl.textContent = 'No peaks found — tap harder or move the mic closer.'; return; }
-  tapNo++;
-  const p = calcPred(); const f1 = p.f[0];
-  let html = '<div class="taphead">Session '+tapNo+' · '+taps+' tap'+(taps===1?'':'s')+' · max envelope</div>'+
-    '<table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
-  pkList.forEach(pk=>{
+function fitDecay(slice, freq){
+  const bin = Math.round(freq/binWidth), pts = [];
+  slice.forEach((fr,i)=>{
+    let m = -120;
+    for(let d=-2;d<=2;d++){ const v = fr[bin+d]; if(v > m) m = v; }
+    pts.push([i/FPS, m]);
+  });
+  let pk = 0; for(let i=1;i<pts.length;i++) if(pts[i][1] > pts[pk][1]) pk = i;
+  const seg = pts.slice(pk).filter(q=>q[1] > -95);
+  if(seg.length < 5) return null;
+  const n = seg.length; let sx=0,sy=0,sxx=0,sxy=0;
+  for(const [x,y] of seg){ sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
+  const slope = (n*sxy - sx*sy)/(n*sxx - sx*sx);
+  if(!(slope < -1)) return null;                      // steady tone / noise, not a ring-down
+  const w0 = 2*Math.PI*freq, zeta = (-slope/8.686)/w0; // dB/s -> amplitude decay -> damping ratio
+  return { slope, t60: 60/Math.abs(slope), zeta, Q: 1/(2*zeta) };
+}
+function analyse(spec, taps, decaySlice){
+  const all = findSpringPeaks(spec, -80);
+  if(!all.length){ statusEl.textContent = 'No peaks found — tap harder or move the mic closer.'; return; }
+  const p = calcPred(), f1 = p.f[0];
+  // match every peak first: a mode is a mode whatever its level, so never let a dB cut hide one
+  const rows = all.map(pk=>{
     let bi=0, bd=1e9;
     p.f.forEach((f,j)=>{ const d=Math.abs(pk.freq-f); if(d<bd){bd=d;bi=j;} });
-    const fP=p.f[bi], eEst=(p.E1/1e9)*(pk.freq/fP)*(pk.freq/fP);
-    const pct = 100*bd/fP, cls = pct<3 ? 'good' : (pct<8 ? '' : 'bad');
-    // anything well below f1 is the spring rocking on its supports / handling noise, not a bending mode
-    const axial = pk.freq < f1*0.7;
-    // more than 10% off every predicted mode is not that mode — refuse to invent an E for it
-    const label = axial ? 'below f1' : (pct > 8 ? '—' : 'p'+(bi+1));
-    const showE = !axial && pct <= 8;
-    html += '<tr><td class="peakline">'+pk.freq.toFixed(1)+'</td><td>'+pk.db.toFixed(0)+'</td><td>'+
-      label+'</td><td class="'+cls+'">'+bd.toFixed(1)+'</td><td class="'+cls+'">'+pct.toFixed(1)+'</td><td>'+
-      (showE ? eEst.toFixed(1) : '—')+'</td></tr>';
+    const fP=p.f[bi], pct=100*bd/fP;
+    const axial = pk.freq < f1*0.7;                    // support/hand rocking, not a bending mode
+    const isMode = !axial && pct <= 8;                 // within 8% of a prediction = that mode
+    return {freq:pk.freq, db:pk.db, bi, bd, pct, axial, isMode,
+            eEst:(p.E1/1e9)*(pk.freq/fP)*(pk.freq/fP)};
+  });
+  // two peaks can land near the same prediction: keep only the closest as that mode
+  const best = {};
+  rows.forEach(r=>{ if(r.isMode && (best[r.bi] === undefined || r.pct < best[r.bi].pct)) best[r.bi] = r; });
+  rows.forEach(r=>{ if(r.isMode && best[r.bi] !== r) r.isMode = false; });
+  const modes = rows.filter(r=>r.isMode);
+  const topDb = rows.reduce((m,r)=>Math.max(m,r.db), -120);
+  const others = rows.filter(r=>!r.isMode && r.db > topDb - 12).sort((a,b)=>b.db-a.db).slice(0,3);  // prominent, unexplained only
+  const show = modes.concat(others).sort((a,b)=>a.freq-b.freq);                // strength first, THEN order
+  tapNo++;
+  let html = '<div class="taphead">Session '+tapNo+' · '+taps+' tap'+(taps===1?'':'s')+' · max envelope</div>'+
+    '<table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
+  show.forEach(r=>{
+    const cls = r.pct<3 ? 'good' : (r.pct<8 ? '' : 'bad');
+    const label = r.axial ? 'below f1' : (r.isMode ? 'p'+(r.bi+1) : '—');
+    html += '<tr><td class="peakline">'+r.freq.toFixed(1)+'</td><td>'+r.db.toFixed(0)+'</td><td>'+label+
+      '</td><td class="'+cls+'">'+r.bd.toFixed(1)+'</td><td class="'+cls+'">'+r.pct.toFixed(1)+'</td><td>'+
+      (r.isMode ? r.eEst.toFixed(1) : '—')+'</td></tr>';
   });
   html += '</table>';
-  html += '<div class="dim">Envelope keeps the strongest level each mode reached at ANY tap position, so tapping along the spring builds one complete picture. E from the frequencies only.</div>';
+  // damping: one ring-down, per mode — ζ and Q from the decay slope (no half-power bandwidth needed)
+  if(decaySlice && decaySlice.length >= 8){
+    const parts = [];
+    modes.forEach(r=>{
+      const d = fitDecay(decaySlice, r.freq);
+      if(d) parts.push('p'+(r.bi+1)+': T60 '+d.t60.toFixed(2)+' s · Q '+(d.Q>999?Math.round(d.Q):d.Q.toFixed(0)));
+    });
+    if(parts.length) html += '<div class="dim">Damping from this single ring-down — '+parts.join(' · ')+'</div>';
+  }
+  html += '<div class="dim">Blue envelope keeps the strongest level each mode reached at ANY tap position. A row is called a mode only within 8% of a prediction; E comes from frequency alone.</div>';
   if(tapNo===1) resultEl.innerHTML = '';
   resultEl.insertAdjacentHTML('beforeend', html);
   resultEl.scrollTop = resultEl.scrollHeight;
   lastResultAt = performance.now();
-  statusEl.textContent = 'Session '+tapNo+' saved — '+pkList.length+' peaks from '+taps+' taps. Blue trace stays; tap again for the next spring.';
+  statusEl.textContent = 'Session '+tapNo+' saved — '+modes.length+' mode'+(modes.length===1?'':'s')+' from '+taps+' tap'+(taps===1?'':'s')+'. Blue trace stays; tap again for the next spring.';
 }
 // buttons
 btnStart.addEventListener('click', async ()=>{
