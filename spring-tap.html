@@ -467,7 +467,7 @@ function detectEnds(spec){
   // a wider shoulder window — the same reason the visual picker missed them
   const cand = [];
   const top = Math.min(spec.length-14, Math.floor(8000/binWidth));
-  for(let i=14;i<top;i++){
+  for(let i=3;i<top;i++){
     const v = spec[i];
     if(v <= spec[i-1] || v <= spec[i+1] || v <= spec[i-3] || v <= spec[i+3]) continue;
     let lm = 1e9, rm = 1e9;
@@ -476,8 +476,10 @@ function detectEnds(spec){
   }
   if(cand.length < 3) return null;
   let best = null;
+  const scores = {};
   ['ff','cant'].forEach(k=>{
     const B = BETA[k], ratios = B.slice(1).map(b=>(b/B[0])*(b/B[0]));
+    let kBest = { hits:0, err:9, f1:0 };
     for(let i=0;i<cand.length;i++){
       const f1 = cand[i].freq;
       let hits = 0, err = 0;
@@ -487,12 +489,14 @@ function detectEnds(spec){
         for(let q=0;q<cand.length;q++){ const f = cand[q].freq; if(f > f1*1.5){ const d = Math.abs(f-target); if(d<bd) bd = d; } }
         if(bd/target < 0.06){ hits++; err += bd/target; }
       });
-      // three independent higher modes agreeing on one ladder is not a coincidence
-      if(hits >= 3 && (best === null || hits > best.hits || (hits === best.hits && err < best.err))){
+      if(hits > kBest.hits || (hits === kBest.hits && err < kBest.err)) kBest = { hits, err, f1 };
+      if(best === null || hits > best.hits || (hits === best.hits && err < best.err)){
         best = { ends:k, hits, err, f1 };
       }
     }
+    scores[k] = kBest;
   });
+  if(best) best.scores = scores;
   return best;
 }
 function analyse(spec, taps, decaySlice){
@@ -533,8 +537,8 @@ function analyse(spec, taps, decaySlice){
     const y1=spec[bi-1], y2=spec[bi], y3=spec[bi+1], den=2*y2-y1-y3;
     let off = den > 0 ? (y3-y1)/(2*den) : 0;
     if(!isFinite(off) || Math.abs(off) > 0.5) off = 0;
-    const freq = (bi+off)*binWidth;
-    rows.push({freq, db:y2, label:m.label, axis:m.axis, bin:bi, bd:Math.abs(freq-fp), pct:100*Math.abs(freq-fp)/fp,
+    const freq = Math.min(Math.max((bi+off)*binWidth, lo*binWidth), hi*binWidth);
+    rows.push({freq, db:y2, label:m.label, axis:m.axis, fp:fp, bin:bi, bd:Math.abs(freq-fp), pct:100*Math.abs(freq-fp)/fp,
                eEst:(m.E/1e9)*(freq/fp)*(freq/fp), isMode:true});
   });
   // one peak cannot be two modes: whichever prediction it sits closest to keeps it
@@ -557,7 +561,10 @@ function analyse(spec, taps, decaySlice){
   // end condition the part really has — whatever the Ends box claims.
   const det = detectEnds(spec);
   let bcWarn = '';
-  if(det && det.ends !== (inB.value === 'cant' ? 'cant' : 'ff')){
+  const sel0 = inB.value === 'cant' ? 'cant' : 'ff';
+  if(det && det.ends !== sel0 && det.scores &&
+     det.scores[det.ends].hits >= 3 &&
+     det.scores[det.ends].hits >= (det.scores[sel0] ? det.scores[sel0].hits : 0) + 2){
     const names = { ff:'free-free', cant:'clamped-free' };
     bcWarn = '<div class="warn">These peaks follow '+names[det.ends]+' ratios — '+det.hits+
       ' higher mode'+(det.hits===1?'':'s')+' within 8% of that ladder, lowest mode ~'+
@@ -601,6 +608,20 @@ function analyse(spec, taps, decaySlice){
   }).join(' · ');
   if(bcWarn) html += bcWarn;
   if(axisCheck) html += '<div class="dim">Modulus check by axis — '+axisCheck+'</div>';
+  // If every mode reads low by the same ratio, the geometry is wrong, not the material.
+  // The implied free length turns a spread of moduli into one calibration number.
+  const Lmm = parseFloat(inL.value);
+  const le = modeRows.filter(r=>r.axis === 'L' && r.fp).map(r=>Lmm*Math.sqrt(r.fp/r.freq));
+  if(le.length >= 3 && Lmm > 0){
+    const lo = Math.min.apply(null,le), hi = Math.max.apply(null,le);
+    if((hi-lo)/lo < 0.03){
+      const mean = le.reduce((a,b)=>a+b,0)/le.length;
+      html += '<div class="dim">Length check — the modes imply an effective free length of <b>'+
+        mean.toFixed(0)+' mm</b> ('+le.map(v=>v.toFixed(0)).join(' / ')+') against '+Lmm+
+        ' mm entered, so the clamp adds about '+Math.abs(mean-Lmm).toFixed(0)+
+        ' mm. Enter L = '+mean.toFixed(0)+' mm and every E above returns to '+inE1.value+' GPa.</div>';
+    }
+  }
   // a phone mic is rolling off and lumpy above ~15 kHz: a "mode" up there is often the
   // microphone, not the spring, and its modulus would be fiction
   const hf = modeRows.filter(r=>r.freq > 15000);
