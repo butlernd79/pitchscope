@@ -34,6 +34,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
 .shot a { text-decoration:none; }
 .warn { color:#f90; }
 #ver { font:600 11px monospace; color:#9c9; border:1px solid #2c4; border-radius:3px; padding:1px 5px; margin-left:6px; }
+.tdc { width:100%; max-width:660px; border:1px solid #333; border-radius:4px; display:block; margin:6px 0 4px; }
 </style>
 </head>
 <body>
@@ -78,7 +79,7 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.15';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.17';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -367,7 +368,38 @@ function spectrumCSV(spec, p, taps, modeRows, missing, others, axisCheck, dampPa
   return L.join('\n');
 }
 // a saved graph must stand alone: plot band plus header and footer text
-function exportGraph(title, summary){
+// time domain: audio intensity per frame, with the counted strikes marked
+function drawTD(cv, trace, hits){
+  const W = cv.width, H = cv.height, g = cv.getContext('2d');
+  const s = trace.map(v=>Math.min(0, Math.max(-100, v)));   // dB re full scale, clamped to the axis
+  g.fillStyle = '#000'; g.fillRect(0,0,W,H);
+  const TOP = 0, BOT = -100, L = 26, R = 6, T = 14, B = 13;
+  const y = v => T + (TOP - v)/(TOP - BOT)*(H - T - B);
+  const x = i => L + i/(Math.max(1,s.length-1))*(W - L - R);
+  g.font = '9px monospace'; g.textBaseline = 'middle'; g.textAlign = 'right';
+  [-20,-40,-60,-80].forEach(d=>{
+    g.strokeStyle = '#1c1c1c'; g.beginPath(); g.moveTo(L, y(d)); g.lineTo(W-R, y(d)); g.stroke();
+    g.fillStyle = '#777'; g.fillText(d, L-4, y(d));
+  });
+  g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = '#8c8';
+  g.fillText('time domain · level dB · '+(s.length/FPS).toFixed(1)+' s', L, 2);
+  if(s.length > 1){
+    g.beginPath(); g.moveTo(x(0), H-B);
+    s.forEach((v,i)=>g.lineTo(x(i), y(v)));
+    g.lineTo(x(s.length-1), H-B); g.closePath();
+    g.fillStyle = 'rgba(60,200,120,0.25)'; g.fill();
+    g.strokeStyle = '#3c8'; g.lineWidth = 1.2; g.beginPath();
+    s.forEach((v,i)=>i?g.lineTo(x(i),y(v)):g.moveTo(x(i),y(v)));
+    g.stroke();
+  }
+  g.fillStyle = '#ff0';
+  hits.forEach((i,k)=>{
+    g.fillRect(x(i)-1, T, 2, H-T-B);
+    g.textBaseline = 'top'; g.fillText(String(k+1), x(i)+3, T+1);
+  });
+  g.strokeStyle = '#333'; g.beginPath(); g.moveTo(L,H-B); g.lineTo(W-R,H-B); g.stroke();
+}
+function exportGraph(title, summary, tdcv){
   const pad = 24, LH = 14;
   // wrap the footer instead of letting it run off the right edge
   const lines = [];
@@ -379,16 +411,18 @@ function exportGraph(title, summary){
     if(probe.measureText(t).width > canvasW-14 && cur){ lines.push(cur); cur = w; } else cur = t;
   });
   if(cur) lines.push(cur);
-  const h2 = canvasH + pad + 8 + lines.length*LH;
+  const tdH = tdcv ? tdcv.height + 4 : 0;
+  const h2 = canvasH + pad + 8 + tdH + lines.length*LH;
   const c = document.createElement('canvas');
   c.width = canvasW; c.height = h2;
   const g = c.getContext('2d');
   g.fillStyle = '#000'; g.fillRect(0,0,c.width,h2);
   g.drawImage(canvas, 0, pad);
+  if(tdcv) g.drawImage(tdcv, 0, pad + canvasH + 4);
   g.font = '12px monospace'; g.textBaseline = 'top'; g.textAlign = 'left';
   g.fillStyle = '#ddd'; g.fillText(title, 6, 5);
   g.fillStyle = '#888';
-  lines.forEach((ln,i)=>g.fillText(ln, 6, pad + canvasH + 6 + i*LH));
+  lines.forEach((ln,i)=>g.fillText(ln, 6, pad + canvasH + 6 + tdH + i*LH));
   return c.toDataURL('image/png');
 }
 // always-on loop from page load (same as proven tuner)
@@ -444,27 +478,30 @@ function startSession(firstIsTap){
 }
 function countOnsets(tr){
   const s = tr.map(v=>Math.max(v,-90));            // digital silence is not a real level
-  if(s.length < 4) return 0;
-  const sorted = s.slice().sort((a,b)=>a-b), quiet = sorted[Math.floor(sorted.length*0.2)];
-  let n = 0, last = -99;
-  for(let i=3;i<s.length-1;i++){
-    if(s[i] < quiet + 10) continue;                          // not a strike
-    if(!(s[i] >= s[i-1] && s[i] > s[i+1])) continue;         // must be a local max
-    if(s[i] - Math.min.apply(null, s.slice(Math.max(0,i-8), i)) < 10) continue;  // rose out of quiet
-    if(i - last >= 3){ n++; last = i; }                      // >=3 frames apart (~100 ms)
+  if(s.length < 4) return [];
+  const quiet = Math.min.apply(null, s), peak = Math.max.apply(null, s);
+  const th = Math.max(quiet + 10, quiet + 0.45*(peak - quiet));   // half-way up the dynamic range
+  const hits = [];
+  let inRun = false, gap = 0;
+  for(let i=0;i<s.length;i++){
+    if(s[i] > th){
+      if(!inRun && !(gap > 0 && gap < 4)) hits.push(i);   // <4 frames quiet (~130 ms) = same strike's bounce
+      inRun = true; gap = 0;
+    } else { inRun = false; gap++; }
   }
-  return n;
+  return hits;
 }
 function endSession(){
   if(!session) return;
   const live = session.taps, start = session.startIdx, trace = session.trace; session = null;
   tapArmed = true; lastTapLvl = -999;              // a finished session must not lock out the next one
-  const taps = Math.max(live, countOnsets(trace)); // trust the recorded trace over the live trigger
-  window.__lastTrace = trace;
+  const hits = countOnsets(trace);
+  const taps = live;                              // trace is shown as evidence, it does not override
+  window.__lastTrace = trace; window.__lastHits = hits;
   if(!envBuf){ statusEl.textContent = 'Nothing captured.'; return; }
   // damping only means something on ONE ring-down — pass it only for a single-tap session
   analyse(envBuf, taps, (taps === 1 && start >= 0) ? frames.slice(start, start+45) : null);
-  if(taps !== live) statusEl.textContent = 'Session saved — counted '+taps+' taps from the level trace (live trigger saw '+live+').';
+  statusEl.textContent = 'Session saved — '+live+' tap'+(live===1?'':'s')+' counted, '+hits.length+' strike'+(hits.length===1?'':'s')+' visible in the time domain.';
 }
 function fitDecay(slice, freq){
   const bin = Math.round(freq/binWidth), pts = [];
@@ -674,6 +711,7 @@ function analyse(spec, taps, decaySlice){
     if(dampParts.length) html += '<div class="dim">Damping from this single ring-down — '+dampParts.join(' · ')+'</div>';
   }
   html += '<div class="dim">Each mode is the strongest response within ±10% of its prediction, whatever its level. E comes from frequency alone.</div>'+
+    '<canvas class="tdc" id="tdc'+tapNo+'" width="660" height="110"></canvas>'+
     '<div class="shot" id="shot'+tapNo+'"></div></div>';
   if(tapNo===1) resultEl.innerHTML = '';
   resultEl.insertAdjacentHTML('beforeend', html);
@@ -690,10 +728,12 @@ function analyse(spec, taps, decaySlice){
     modeRows.map(r=>r.label+' '+r.freq.toFixed(0)+'Hz '+(r.pct>=0?'+':'')+r.pct.toFixed(1)+'% '+r.eEst.toFixed(1)+'GPa').join('  ') +
     (missing.length ? '   no response: '+missing.join(', ') : '');
   requestAnimationFrame(()=>{
+    const tdcv = document.getElementById('tdc'+shotId);
+    if(tdcv) drawTD(tdcv, window.__lastTrace || [], window.__lastHits || []);
     drawSpectrum();
     const el = document.getElementById('shot'+shotId);
     if(!el) return;
-    const url = exportGraph(titleTxt, summaryTxt);
+    const url = exportGraph(titleTxt, summaryTxt, tdcv);
     const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'');
     const csv = spectrumCSV(spec, p, taps, modeRows, missing, others, (bcWarn?bcWarn.replace(/<[^>]+>/g,'')+' | ':'')+axisCheck, dampParts);
     el.innerHTML = '<a href="'+url+'" download="spring-session-'+shotId+'-'+stamp+'.png">'+
