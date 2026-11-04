@@ -79,7 +79,7 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.17';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.19';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -477,17 +477,17 @@ function startSession(firstIsTap){
   session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0, startIdx: frames.length, trace: [] };
 }
 function countOnsets(tr){
-  const s = tr.map(v=>Math.max(v,-90));            // digital silence is not a real level
+  const s = tr.map(v=>Math.min(0, Math.max(-90, v)));        // digital silence is not a level
   if(s.length < 4) return [];
   const quiet = Math.min.apply(null, s), peak = Math.max.apply(null, s);
-  const th = Math.max(quiet + 10, quiet + 0.45*(peak - quiet));   // half-way up the dynamic range
-  const hits = [];
-  let inRun = false, gap = 0;
+  if(peak - quiet < 12) return [];                          // nothing standing out of the noise
+  const th = quiet + 0.45*(peak - quiet);                   // half way up this session's dynamic range
+  // hysteresis, no time windows: arm above th, re-arm only after falling 6 dB back below it.
+  // Frame-rate independent, and a bounce inside one strike never re-arms.
+  const hits = []; let high = false;
   for(let i=0;i<s.length;i++){
-    if(s[i] > th){
-      if(!inRun && !(gap > 0 && gap < 4)) hits.push(i);   // <4 frames quiet (~130 ms) = same strike's bounce
-      inRun = true; gap = 0;
-    } else { inRun = false; gap++; }
+    if(!high && s[i] > th){ hits.push(i); high = true; }
+    else if(high && s[i] < th - 6){ high = false; }
   }
   return hits;
 }
@@ -496,12 +496,12 @@ function endSession(){
   const live = session.taps, start = session.startIdx, trace = session.trace; session = null;
   tapArmed = true; lastTapLvl = -999;              // a finished session must not lock out the next one
   const hits = countOnsets(trace);
-  const taps = live;                              // trace is shown as evidence, it does not override
+  const taps = hits.length || live;              // the visible trace is the count you can check
   window.__lastTrace = trace; window.__lastHits = hits;
   if(!envBuf){ statusEl.textContent = 'Nothing captured.'; return; }
   // damping only means something on ONE ring-down — pass it only for a single-tap session
   analyse(envBuf, taps, (taps === 1 && start >= 0) ? frames.slice(start, start+45) : null);
-  statusEl.textContent = 'Session saved — '+live+' tap'+(live===1?'':'s')+' counted, '+hits.length+' strike'+(hits.length===1?'':'s')+' visible in the time domain.';
+  statusEl.textContent = 'Session saved — '+taps+' tap'+(taps===1?'':'s')+' counted from the time domain'+(live!==taps?' (live trigger said '+live+')':'')+'.';
 }
 function fitDecay(slice, freq){
   const bin = Math.round(freq/binWidth), pts = [];
