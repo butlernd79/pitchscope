@@ -33,6 +33,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
 .shot img { width:100%; max-width:660px; border:1px solid #333; border-radius:4px; display:block; margin-top:5px; }
 .shot a { text-decoration:none; }
 .warn { color:#f90; }
+#ver { font:600 11px monospace; color:#9c9; border:1px solid #2c4; border-radius:3px; padding:1px 5px; margin-left:6px; }
 </style>
 </head>
 <body>
@@ -42,6 +43,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
     <button id="btnStop">■ Stop</button>
     <button id="btnCap" disabled>⏺ Record 5 s</button>
     <button id="btnClear">✕ Clear log</button>
+    <span id="ver" title="build">v?</span>
     <span id="status">Ready — press Start, then just tap the spring</span>
   </div>
   <div id="dims">
@@ -76,6 +78,8 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
+const BUILD = 'v1.9';   // bump every deploy; shown on screen and written into the PNG/CSV
+if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 // audio state (same pattern as proven tuner)
@@ -99,7 +103,7 @@ let smoothBuf = null, livePeaks = [], micLevelDb = -999, micTimeBuf = null;
 let silentFrames = 0, lastLive = null;
 let tapNo = 0, session = null;               // session = {endsAt, taps}
 let lastTapAt = 0, prevLvl = -999, floorDb = -999, lastResultAt = 0;
-let envBuf = null;
+let envBuf = null, tapArmed = true;
 const SESSION_MS = 5000;                     // one session = 5 s of tapping, as many places as you like
 
 async function startAudio() {
@@ -340,7 +344,7 @@ function spectrumCSV(spec, p, taps, modeRows, missing, others, axisCheck, dampPa
   const bw = binWidth || sampleRate/FFT_SIZE;
   const D = new Date(), z = n=>String(n).padStart(2,'0');
   const L = [];
-  L.push('# spring-tap session '+tapNo+'  '+z(D.getDate())+'/'+z(D.getMonth()+1)+'/'+D.getFullYear()+' '+
+  L.push('# spring-tap '+BUILD+' session '+tapNo+'  '+z(D.getDate())+'/'+z(D.getMonth()+1)+'/'+D.getFullYear()+' '+
          z(D.getHours())+':'+z(D.getMinutes())+':'+z(D.getSeconds()));
   L.push('# geometry_mm: L='+inL.value+' W='+inW.value+' T='+inT.value+' mass_g='+(inM.value||'blank'));
   L.push('# assumed: E_L_GPa='+inE1.value+' E_W_GPa='+inE2.value+' ends='+inB.value);
@@ -404,7 +408,9 @@ function render(now){
     // (Floor ignores the rise; the rise test ignores the decay tail — that combination is
     // what lets several taps follow each other quickly without false triggers.)
     if(floorDb === -999) floorDb = micLevelDb;
-    if(micLevelDb > floorDb + 12 && micLevelDb > -55 && micLevelDb > prevLvl + 6 && now - lastTapAt > 250){
+    if(micLevelDb < floorDb + 6) tapArmed = true;      // quiet again: re-arm for the next hit
+    if(tapArmed && micLevelDb > floorDb + 12 && micLevelDb > -55 && micLevelDb > prevLvl + 6 && now - lastTapAt > 350){
+      tapArmed = false;                                 // one strike = one tap
       lastTapAt = now;
       if(!session) startSession(true);      // first tap opens a 5 s session…
       else session.taps++;                  // …later taps just add to the same envelope
@@ -649,7 +655,7 @@ function analyse(spec, taps, decaySlice){
   const dims = (+inL.value)+'\u00d7'+(+inW.value)+'\u00d7'+(+inT.value)+' mm \u00b7 rho '+p.rho.toFixed(0)+' kg/m3'+(p.hasMass?'':' (assumed)')+(inB.value==='cant'?' \u00b7 cantilever':' \u00b7 free-free');
   const D = new Date(), p2 = n=>String(n).padStart(2,'0');
   const when = p2(D.getDate())+'/'+p2(D.getMonth()+1)+'/'+D.getFullYear()+' '+p2(D.getHours())+':'+p2(D.getMinutes());
-  const titleTxt = 'Session '+tapNo+' \u00b7 '+taps+' tap'+(taps===1?'':'s')+' \u00b7 '+when+' \u00b7 '+dims+
+  const titleTxt = BUILD+' \u00b7 Session '+tapNo+' \u00b7 '+taps+' tap'+(taps===1?'':'s')+' \u00b7 '+when+' \u00b7 '+dims+
     ' \u00b7 mic '+(sampleRate/1000).toFixed(1)+'kHz FFT '+FFT_SIZE;
   const summaryTxt = 'measured / dev vs prediction / E:  ' +
     modeRows.map(r=>r.label+' '+r.freq.toFixed(0)+'Hz '+(r.pct>=0?'+':'')+r.pct.toFixed(1)+'% '+r.eEst.toFixed(1)+'GPa').join('  ') +
