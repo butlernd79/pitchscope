@@ -79,12 +79,12 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.21';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.25';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 // audio state (same pattern as proven tuner)
-let audioCtx = null, analyser = null, source = null, stream = null, hpFilter = null;
+let audioCtx = null, analyser = null, waveAnalyser = null, source = null, stream = null, hpFilter = null;
 let wakeLock = null;
 async function requestWake(){
   try{
@@ -129,6 +129,8 @@ async function startAudio() {
     hpFilter = audioCtx.createBiquadFilter();
     hpFilter.type = 'highpass'; hpFilter.frequency.value = 70;
     source.connect(hpFilter); hpFilter.connect(analyser);
+    waveAnalyser = audioCtx.createAnalyser(); waveAnalyser.fftSize = 32768;   // long contiguous window
+    hpFilter.connect(waveAnalyser);
     binWidth = sampleRate / FFT_SIZE;
     smoothBuf = null;
     // do NOT await resume(): it can stay pending forever and silently freeze the whole start path
@@ -404,25 +406,29 @@ function drawWave(cv, wave, sr){
   const W = cv.width, H = cv.height, g = cv.getContext('2d');
   g.fillStyle = '#000'; g.fillRect(0,0,W,H);
   g.font = '9px monospace'; g.textBaseline = 'top'; g.fillStyle = '#8c8';
-  if(!wave || !wave.length){ g.fillText('waveform · nothing captured', 4, 3); return; }
-  const total = wave.reduce((a,w)=>a+w.length,0);
-  const N = Math.min(total, 8192);                     // first ~170 ms at 48 kHz
-  const buf = new Float32Array(N);
-  let k = 0;
-  for(const w of wave){ for(let i=0;i<w.length && k<N;i++) buf[k++] = w[i]; }
-  let peak = 0; for(let i=0;i<N;i++){ const v=Math.abs(buf[i]); if(v>peak) peak=v; }
+  // ONE contiguous analyser window. Stitching several frames together produced a fake second
+  // impact and a fake peak at the joins.
+  const raw = (wave && wave[0]) ? wave[0] : null;
+  if(!raw || !raw.length){ g.fillText('waveform · nothing captured', 4, 3); return; }
+  let peak = 0; for(let i=0;i<raw.length;i++){ const v=Math.abs(raw[i]); if(v>peak) peak=v; }
+  // start the window at the impact, so the decay is what you see, not the silence before it
+  let st = 0; for(let i=0;i<raw.length;i++){ if(Math.abs(raw[i]) > peak*0.2){ st = i; break; } }
+  // 120 ms is the sweet spot: enough cycles at 474 Hz (about 57) to see the waveform, short
+  // enough that it is not a solid block of ink.
+  const shown = Math.min(raw.length - st, Math.round(sr * 0.12));
+  const buf = raw.subarray(st, st + shown), N = buf.length;
   const mid = H/2 + 6, amp = (H-20)/2;
   g.strokeStyle = '#222'; g.beginPath(); g.moveTo(0,mid); g.lineTo(W,mid); g.stroke();
-  const per = N / (W-4);
-  g.strokeStyle = peak > 0.98 ? '#f66' : '#e55'; g.lineWidth = 1;
+  const per = Math.max(1, N / (W-4));
+  g.strokeStyle = peak >= 0.999 ? '#f66' : '#e55'; g.lineWidth = 1;
   for(let x=0;x<W-4;x++){
     let lo = 0, hi = 0;
-    for(let j=0;j<per;j++){ const v = buf[Math.floor(x*per+j)] || 0; if(v<lo) lo=v; if(v>hi) hi=v; }
+    for(let j=0;j<per;j++){ const v = buf[Math.min(N-1, Math.floor(x*per+j))] || 0; if(v<lo) lo=v; if(v>hi) hi=v; }
     g.beginPath(); g.moveTo(x+2, mid - hi*amp); g.lineTo(x+2, mid - lo*amp); g.stroke();
   }
-  g.fillStyle = peak > 0.98 ? '#f66' : '#8c8';
-  g.fillText('waveform · '+(N/sr*1000).toFixed(0)+' ms · peak '+(peak>0?20*Math.log10(peak):-99).toFixed(1)+' dBFS'+
-    (peak > 0.98 ? ' · CLIPPING — mic input is overdriven' : ''), 4, 3);
+  g.fillStyle = peak >= 0.999 ? '#f66' : '#8c8';
+  g.fillText('waveform · strike 1 · first '+(N/sr*1000).toFixed(0)+' ms after impact · peak '+(peak>0?(20*Math.log10(peak)).toFixed(1):'-99')+' dBFS'+
+    (peak >= 0.999 ? ' · CLIPPING — mic input is overdriven' : ''), 4, 3);
 }
 function exportGraph(title, summary, tdcv, wavcv){
   const pad = 24, LH = 14;
@@ -472,7 +478,14 @@ function render(now){
       else session.taps++;                  // …later taps just add to the same envelope
     }
     if(session && session.trace.length < 400) session.trace.push(micLevelDb);
-    if(session && session.grab > 0 && micTimeBuf){ session.wave.push(Float32Array.from(micTimeBuf)); session.grab--; }
+    if(session && session.grab > 0){
+      session.grab--;
+      if(session.grab === 0 && waveAnalyser){
+        const wb = new Float32Array(waveAnalyser.fftSize);
+        waveAnalyser.getFloatTimeDomainData(wb);   // ~0.27 s after the strike: impact stays inside the window
+        session.wave.push(wb);
+      }
+    }
     prevLvl = micLevelDb;
     floorDb = Math.min(micLevelDb, floorDb + 0.3);
     if(floorDb < -80) floorDb = -80;                  // -80 dB is digital silence, not a floor
