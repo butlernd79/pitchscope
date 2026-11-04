@@ -462,6 +462,39 @@ function fitDecay(slice, freq){
   const w0 = 2*Math.PI*freq, zeta = (-slope/8.686)/w0; // dB/s -> amplitude decay -> damping ratio
   return { slope, t60: 60/Math.abs(slope), zeta, Q: 1/(2*zeta) };
 }
+function detectEnds(spec){
+  // broad clamped peaks have little prominence inside +/-4 bins, so build our own list with
+  // a wider shoulder window — the same reason the visual picker missed them
+  const cand = [];
+  const top = Math.min(spec.length-14, Math.floor(8000/binWidth));
+  for(let i=14;i<top;i++){
+    const v = spec[i];
+    if(v <= spec[i-1] || v <= spec[i+1] || v <= spec[i-3] || v <= spec[i+3]) continue;
+    let lm = 1e9, rm = 1e9;
+    for(let k=1;k<=12;k++){ if(spec[i-k] < lm) lm = spec[i-k]; if(spec[i+k] < rm) rm = spec[i+k]; }
+    if(v - Math.max(lm, rm) >= 8) cand.push({ freq:i*binWidth, db:v });
+  }
+  if(cand.length < 3) return null;
+  let best = null;
+  ['ff','cant'].forEach(k=>{
+    const B = BETA[k], ratios = B.slice(1).map(b=>(b/B[0])*(b/B[0]));
+    for(let i=0;i<cand.length;i++){
+      const f1 = cand[i].freq;
+      let hits = 0, err = 0;
+      ratios.forEach(rt=>{
+        const target = f1*rt;
+        let bd = 1e9;
+        for(let q=0;q<cand.length;q++){ const f = cand[q].freq; if(f > f1*1.5){ const d = Math.abs(f-target); if(d<bd) bd = d; } }
+        if(bd/target < 0.06){ hits++; err += bd/target; }
+      });
+      // three independent higher modes agreeing on one ladder is not a coincidence
+      if(hits >= 3 && (best === null || hits > best.hits || (hits === best.hits && err < best.err))){
+        best = { ends:k, hits, err, f1 };
+      }
+    }
+  });
+  return best;
+}
 function analyse(spec, taps, decaySlice){
   const p = calcPred(), f1 = p.ladder[0].f;
   const rows = [], missing = [];
@@ -477,10 +510,18 @@ function analyse(spec, taps, decaySlice){
     const hi = Math.min(spec.length-4, Math.ceil(fp*1.10/binWidth));
     let bi = -1, best = -999;
     for(let i=lo;i<=hi;i++){ if(spec[i] > best){ best = spec[i]; bi = i; } }
-    const shoulder = Math.min(spec[lo], spec[hi]);
     // only the four displayed modes get a “no response” note; candidates 5-6 are just
     // backups in case the ladder is all one family
-    if(bi < 0 || best < -78 || (best - shoulder) < 6){ if(idx < 4) missing.push(m.label); return; }
+    if(bi < 0 || best < -78){ if(idx < 4) missing.push(m.label); return; }
+    // prominence against BOTH shoulders within +/-8 bins: a gentle slope between two dips
+    // passed the old window-edge test and reported a peak that is not there
+    const NB = 8;
+    let lmin = 1e9, rmin = 1e9;
+    for(let i=Math.max(1,bi-NB); i<bi; i++) lmin = Math.min(lmin, spec[i]);
+    for(let i=bi+1; i<=Math.min(spec.length-2, bi+NB); i++) rmin = Math.min(rmin, spec[i]);
+    const prom = spec[bi] - Math.max(lmin, rmin);
+    const hump = spec[bi] >= spec[bi-2] && spec[bi] >= spec[bi+2];
+    if(prom < 6 || !hump){ if(idx < 4) missing.push(m.label); return; }
     // if the window holds several local maxima, take the one NEAREST the prediction
     // among those within 3 dB of the window maximum (a side peak must not hijack the mode)
     let near = bi;
@@ -507,10 +548,23 @@ function analyse(spec, taps, decaySlice){
   // anything prominent that is NOT inside a mode window: show up to 3, labelled for what it is
   const others = findSpringPeaks(spec, -80)
     .filter(k=>!p.ladder.some(m=>Math.abs(k.freq-m.f)/m.f < 0.12))
+    .filter(k=>!rows.some(r=>Math.abs(k.freq-r.freq) < 2*binWidth))
     .map(k=>({freq:k.freq, db:k.db, bd:null, pct:null, isMode:false, axial:k.freq < f1*0.7}))
     .slice(0,3);
   const show = modeRows.concat(others).sort((a,b)=>a.freq-b.freq);
   tapNo++;
+  // Mode RATIOS are independent of modulus and density, so the peak set itself says which
+  // end condition the part really has — whatever the Ends box claims.
+  const det = detectEnds(spec);
+  let bcWarn = '';
+  if(det && det.ends !== (inB.value === 'cant' ? 'cant' : 'ff')){
+    const names = { ff:'free-free', cant:'clamped-free' };
+    bcWarn = '<div class="warn">These peaks follow '+names[det.ends]+' ratios — '+det.hits+
+      ' higher mode'+(det.hits===1?'':'s')+' within 8% of that ladder, lowest mode ~'+
+      det.f1.toFixed(0)+' Hz — but you selected '+names[inB.value==='cant'?'cant':'ff']+
+      '. The end is not doing what you think it is: check the clamp, or change Ends. '+
+      'The E values below are not valid until that is settled.</div>';
+  }
   let html = '<div id="sess'+tapNo+'"><div class="taphead">Session '+tapNo+' · '+taps+' tap'+(taps===1?'':'s')+' · max envelope</div>';
   if(show.length){
     html += '<table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
@@ -545,6 +599,7 @@ function analyse(spec, taps, decaySlice){
       '(expected: shear and rotary inertia at high order)';
     return k+': '+list+', spread '+sp.toFixed(0)+'% — INCONSISTENT, these are not all '+k+' modes';
   }).join(' · ');
+  if(bcWarn) html += bcWarn;
   if(axisCheck) html += '<div class="dim">Modulus check by axis — '+axisCheck+'</div>';
   // a phone mic is rolling off and lumpy above ~15 kHz: a "mode" up there is often the
   // microphone, not the spring, and its modulus would be fiction
@@ -584,7 +639,7 @@ function analyse(spec, taps, decaySlice){
     if(!el) return;
     const url = exportGraph(titleTxt, summaryTxt);
     const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'');
-    const csv = spectrumCSV(spec, p, taps, modeRows, missing, others, axisCheck, dampParts);
+    const csv = spectrumCSV(spec, p, taps, modeRows, missing, others, (bcWarn?bcWarn.replace(/<[^>]+>/g,'')+' | ':'')+axisCheck, dampParts);
     el.innerHTML = '<a href="'+url+'" download="spring-session-'+shotId+'-'+stamp+'.png">'+
       '<img alt="session '+shotId+' spectrum" src="'+url+'"></a>'+
       '<div class="dim">Click the graph to save it as a PNG · '+
