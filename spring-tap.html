@@ -79,7 +79,7 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.20';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.21';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -115,7 +115,7 @@ async function startAudio() {
     }
     // never hang silently: a pending prompt / absent mic must surface as an error
     stream = await Promise.race([
-      navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:true } }),
+      navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false } }),
       new Promise((_, rej)=>setTimeout(()=>rej(new Error('No answer from the microphone after 12s — permission prompt still pending, or no working mic on this device.')), 12000))
     ]);
     audioCtx = new AudioContext();
@@ -399,7 +399,32 @@ function drawTD(cv, trace, hits){
   });
   g.strokeStyle = '#333'; g.beginPath(); g.moveTo(L,H-B); g.lineTo(W-R,H-B); g.stroke();
 }
-function exportGraph(title, summary, tdcv){
+// raw waveform of the strike: the decaying oscillation itself, min/max per pixel column
+function drawWave(cv, wave, sr){
+  const W = cv.width, H = cv.height, g = cv.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0,0,W,H);
+  g.font = '9px monospace'; g.textBaseline = 'top'; g.fillStyle = '#8c8';
+  if(!wave || !wave.length){ g.fillText('waveform · nothing captured', 4, 3); return; }
+  const total = wave.reduce((a,w)=>a+w.length,0);
+  const N = Math.min(total, 8192);                     // first ~170 ms at 48 kHz
+  const buf = new Float32Array(N);
+  let k = 0;
+  for(const w of wave){ for(let i=0;i<w.length && k<N;i++) buf[k++] = w[i]; }
+  let peak = 0; for(let i=0;i<N;i++){ const v=Math.abs(buf[i]); if(v>peak) peak=v; }
+  const mid = H/2 + 6, amp = (H-20)/2;
+  g.strokeStyle = '#222'; g.beginPath(); g.moveTo(0,mid); g.lineTo(W,mid); g.stroke();
+  const per = N / (W-4);
+  g.strokeStyle = peak > 0.98 ? '#f66' : '#e55'; g.lineWidth = 1;
+  for(let x=0;x<W-4;x++){
+    let lo = 0, hi = 0;
+    for(let j=0;j<per;j++){ const v = buf[Math.floor(x*per+j)] || 0; if(v<lo) lo=v; if(v>hi) hi=v; }
+    g.beginPath(); g.moveTo(x+2, mid - hi*amp); g.lineTo(x+2, mid - lo*amp); g.stroke();
+  }
+  g.fillStyle = peak > 0.98 ? '#f66' : '#8c8';
+  g.fillText('waveform · '+(N/sr*1000).toFixed(0)+' ms · peak '+(peak>0?20*Math.log10(peak):-99).toFixed(1)+' dBFS'+
+    (peak > 0.98 ? ' · CLIPPING — mic input is overdriven' : ''), 4, 3);
+}
+function exportGraph(title, summary, tdcv, wavcv){
   const pad = 24, LH = 14;
   // wrap the footer instead of letting it run off the right edge
   const lines = [];
@@ -411,7 +436,7 @@ function exportGraph(title, summary, tdcv){
     if(probe.measureText(t).width > canvasW-14 && cur){ lines.push(cur); cur = w; } else cur = t;
   });
   if(cur) lines.push(cur);
-  const tdH = tdcv ? tdcv.height + 4 : 0;
+  const tdH = (tdcv ? tdcv.height + 4 : 0) + (wavcv ? wavcv.height + 4 : 0);
   const h2 = canvasH + pad + 8 + tdH + lines.length*LH;
   const c = document.createElement('canvas');
   c.width = canvasW; c.height = h2;
@@ -419,6 +444,7 @@ function exportGraph(title, summary, tdcv){
   g.fillStyle = '#000'; g.fillRect(0,0,c.width,h2);
   g.drawImage(canvas, 0, pad);
   if(tdcv) g.drawImage(tdcv, 0, pad + canvasH + 4);
+  if(wavcv) g.drawImage(wavcv, 0, pad + canvasH + 4 + (tdcv ? tdcv.height + 4 : 0));
   g.font = '12px monospace'; g.textBaseline = 'top'; g.textAlign = 'left';
   g.fillStyle = '#ddd'; g.fillText(title, 6, 5);
   g.fillStyle = '#888';
@@ -446,6 +472,7 @@ function render(now){
       else session.taps++;                  // …later taps just add to the same envelope
     }
     if(session && session.trace.length < 400) session.trace.push(micLevelDb);
+    if(session && session.grab > 0 && micTimeBuf){ session.wave.push(Float32Array.from(micTimeBuf)); session.grab--; }
     prevLvl = micLevelDb;
     floorDb = Math.min(micLevelDb, floorDb + 0.3);
     if(floorDb < -80) floorDb = -80;                  // -80 dB is digital silence, not a floor
@@ -474,7 +501,7 @@ function startSession(firstIsTap){
   // seed from the frame the tap just landed in, otherwise the first tap of the session is lost
   const last = frames.length ? frames[frames.length-1] : null;
   envBuf = last ? Float32Array.from(last) : null;
-  session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0, startIdx: frames.length, trace: [] };
+  session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0, startIdx: frames.length, trace: [], wave: [], grab: 8 };
 }
 function countOnsets(tr){
   const s = tr.map(v=>Math.min(0, Math.max(-90, v)));        // digital silence is not a level
@@ -497,11 +524,11 @@ function countOnsets(tr){
 }
 function endSession(){
   if(!session) return;
-  const live = session.taps, start = session.startIdx, trace = session.trace; session = null;
+  const live = session.taps, start = session.startIdx, trace = session.trace, wave = session.wave; session = null;
   tapArmed = true; lastTapLvl = -999;              // a finished session must not lock out the next one
   const hits = countOnsets(trace);
   const taps = hits.length || live;              // the visible trace is the count you can check
-  window.__lastTrace = trace; window.__lastHits = hits;
+  window.__lastTrace = trace; window.__lastHits = hits; window.__lastWave = wave;
   if(!envBuf){ statusEl.textContent = 'Nothing captured.'; return; }
   // damping only means something on ONE ring-down — pass it only for a single-tap session
   analyse(envBuf, taps, (taps === 1 && start >= 0) ? frames.slice(start, start+45) : null);
@@ -716,6 +743,7 @@ function analyse(spec, taps, decaySlice){
   }
   html += '<div class="dim">Each mode is the strongest response within ±10% of its prediction, whatever its level. E comes from frequency alone.</div>'+
     '<canvas class="tdc" id="tdc'+tapNo+'" width="660" height="110"></canvas>'+
+    '<canvas class="tdc" id="wav'+tapNo+'" width="660" height="88"></canvas>'+
     '<div class="shot" id="shot'+tapNo+'"></div></div>';
   if(tapNo===1) resultEl.innerHTML = '';
   resultEl.insertAdjacentHTML('beforeend', html);
@@ -734,10 +762,12 @@ function analyse(spec, taps, decaySlice){
   requestAnimationFrame(()=>{
     const tdcv = document.getElementById('tdc'+shotId);
     if(tdcv) drawTD(tdcv, window.__lastTrace || [], window.__lastHits || []);
+    const wavcv = document.getElementById('wav'+shotId);
+    if(wavcv) drawWave(wavcv, window.__lastWave || [], sampleRate);
     drawSpectrum();
     const el = document.getElementById('shot'+shotId);
     if(!el) return;
-    const url = exportGraph(titleTxt, summaryTxt, tdcv);
+    const url = exportGraph(titleTxt, summaryTxt, tdcv, wavcv);
     const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'');
     const csv = spectrumCSV(spec, p, taps, modeRows, missing, others, (bcWarn?bcWarn.replace(/<[^>]+>/g,'')+' | ':'')+axisCheck, dampParts);
     el.innerHTML = '<a href="'+url+'" download="spring-session-'+shotId+'-'+stamp+'.png">'+
