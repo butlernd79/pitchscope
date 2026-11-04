@@ -238,8 +238,13 @@ function showPred(){
   const p = calcPred();
   const dens = p.hasMass ? (p.rho.toFixed(0)+' kg/m³ (weighed)') : (p.rho.toFixed(0)+' kg/m³ (ASSUMED — weigh a spring!)');
   const top = p.ladder.slice(0,4).map(m=>'<b>'+m.f.toFixed(0)+'</b> '+m.label).join(' · ');
-  const warn = p.aspect > 0.5
-    ? ' <span class="warn">plate, not beam ('+p.aspect.toFixed(2)+' short/long) — treat as a trend, not an absolute</span>' : '';
+  // a peak cannot be assigned to two predictions that sit within a few percent
+  let tight = 0;
+  for(let i=1;i<p.ladder.length;i++){ if(p.ladder[i].f/p.ladder[i-1].f < 1.10) tight++; }
+  const tightWarn = tight
+    ? ' <span class="warn">'+tight+' predicted pair'+(tight>1?'s':'')+' inside 10% — those peaks cannot be assigned to one mode reliably</span>' : '';
+  const warn = tightWarn + (p.aspect > 0.5
+    ? ' <span class="warn">plate, not beam ('+p.aspect.toFixed(2)+' short/long) — treat as a trend, not an absolute</span>' : '');
   predEl.innerHTML = 'Modes in frequency order: '+top+' Hz'+warn+
     ' &nbsp; <span class="dim">ρ '+dens+' · E = E_nom × (f_meas/f_pred)²</span>';
   return p;
@@ -255,11 +260,15 @@ function drawSpectrum(){
   ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvasW,canvasH);
   const p = calcPred();
   ctx.font = '11px monospace'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
-  p.ladder.slice(0,4).forEach((m,i)=>{
+  let lastLblX = -999, bump = 0;
+  p.ladder.slice(0,6).forEach((m,i)=>{
     const f = m.f, x = f/8000*canvasW;
     ctx.strokeStyle = 'rgba(0,255,0,0.5)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvasH); ctx.stroke();
-    ctx.fillStyle = '#0f0'; ctx.fillText(m.label+' '+f.toFixed(0), x+3, 2+i*13);
+    ctx.fillStyle = '#0f0';
+    if(x - lastLblX < 55) bump++; else bump = 0;
+    ctx.fillText(m.label+' '+f.toFixed(0), x+3, 2+(i+bump)*13);
+    lastLblX = x;
   });
   // dB gridlines: without them a saved graph cannot show how far peaks sit above the noise
   ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 1;
@@ -447,7 +456,7 @@ function analyse(spec, taps, decaySlice){
     let off = den > 0 ? (y3-y1)/(2*den) : 0;
     if(!isFinite(off) || Math.abs(off) > 0.5) off = 0;
     const freq = (bi+off)*binWidth;
-    rows.push({freq, db:y2, label:m.label, bin:bi, bd:Math.abs(freq-fp), pct:100*Math.abs(freq-fp)/fp,
+    rows.push({freq, db:y2, label:m.label, axis:m.axis, bin:bi, bd:Math.abs(freq-fp), pct:100*Math.abs(freq-fp)/fp,
                eEst:(m.E/1e9)*(freq/fp)*(freq/fp), isMode:true});
   });
   // one peak cannot be two modes: whichever prediction it sits closest to keeps it
@@ -474,10 +483,21 @@ function analyse(spec, taps, decaySlice){
       html += '<tr><td class="peakline">'+r.freq.toFixed(1)+'</td><td>'+r.db.toFixed(0)+'</td><td>'+label+'</td>'+
         '<td class="'+cls+'">'+(r.bd === null ? '—' : r.bd.toFixed(1))+'</td>'+
         '<td class="'+cls+'">'+(r.pct === null ? '—' : r.pct.toFixed(1))+'</td>'+
-        '<td>'+(r.isMode && r.pct <= 8 ? r.eEst.toFixed(1) : '—')+'</td></tr>';
+        '<td class="'+(r.pct > 8 ? 'bad' : '')+'">'+(r.isMode ? r.eEst.toFixed(1) : '—')+'</td></tr>';
     });
     html += '</table>';
   }
+  // an axis whose modes disagree on E is telling you those peaks are not one family
+  const byAxis = {};
+  modeRows.forEach(r=>{ (byAxis[r.axis] = byAxis[r.axis] || []).push(r.eEst); });
+  const axLine = Object.keys(byAxis).sort().map(k=>{
+    const es = byAxis[k];
+    if(es.length < 2) return k+': '+es[0].toFixed(1)+' GPa (one mode)';
+    const lo = Math.min.apply(null,es), hi = Math.max.apply(null,es), sp = 100*(hi-lo)/lo;
+    return k+': '+es.map(e=>e.toFixed(1)).join(' / ')+' GPa, spread '+sp.toFixed(0)+'%'+
+      (sp > 10 ? ' — INCONSISTENT, these are not all '+k+' modes' : ' — consistent');
+  }).join(' · ');
+  if(axLine) html += '<div class="dim">Modulus check by axis — '+axLine+'</div>';
   if(missing.length) html += '<div class="dim">No response at '+missing.join(', ')+
     ' — that mode was not excited (or the tap missed it). Nothing is hidden: an unmatched peak still shows as “—”.</div>';
   // damping: one ring-down, per mode — ζ and Q from the decay slope (no half-power bandwidth needed)
@@ -514,7 +534,8 @@ function analyse(spec, taps, decaySlice){
     el.innerHTML = '<a href="'+url+'" download="spring-session-'+shotId+'-'+stamp+'.png">'+
       '<img alt="session '+shotId+' spectrum" src="'+url+'"></a><div class="dim">Click the graph to save it as a PNG.</div>';
   });
-  statusEl.textContent = 'Session '+tapNo+' saved — '+modeRows.length+' of 4 modes found from '+taps+' tap'+(taps===1?'':'s')+'.';
+  statusEl.textContent = 'Session '+tapNo+' saved — '+modeRows.length+' mode'+(modeRows.length===1?'':'s')+
+    ' found from '+taps+' tap'+(taps===1?'':'s')+'.';
 }
 // buttons
 btnStart.addEventListener('click', async ()=>{
