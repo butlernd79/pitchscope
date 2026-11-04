@@ -32,6 +32,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
 .taphead:first-child { margin-top:0; }
 .shot img { width:100%; max-width:660px; border:1px solid #333; border-radius:4px; display:block; margin-top:5px; }
 .shot a { text-decoration:none; }
+.warn { color:#f90; }
 </style>
 </head>
 <body>
@@ -206,23 +207,41 @@ function onNewFrame(raw){
   return livePeaks;
 }
 // predictions
+// bending frequency for ONE family: span = the axis the wave runs along, E = the
+// modulus along that SAME axis. E belongs to the axis, never to the number.
+function beamF(span, T, E, rho, bL){
+  return (bL*bL*T/(2*Math.PI*span*span))*Math.sqrt(E/(12*rho));
+}
 function calcPred(){
   const L=+inL.value/1000, W=+inW.value/1000, T=+inT.value/1000;
   const m=+inM.value/1000;
   const E1=+inE1.value*1e9, E2=+inE2.value*1e9;
   const rho = m>0 ? m/(L*W*T) : 1900;
   const B = BETA[inB.value] || BETA.ff;
-  const f = B.map(b=>(b*b*T/(2*Math.PI*L*L))*Math.sqrt(E1/(12*rho)));
-  const fW = ((4.7300408**2)*T/(2*Math.PI*W*W))*Math.sqrt(E2/(12*rho));
-  return { L,W,T,rho,E1,f,fW, hasMass:m>0 };
+  // TWO families: bending along L (governed by E-L) and along W (governed by E-W).
+  // A short, soft direction can be the LOWEST mode even though it is the "width", so
+  // both are predicted and merged by frequency. The dimensions are never swapped by
+  // hand: that would carry E-L across to the other axis (measured 76% error on a
+  // 166x138x2.25 part). The app works the order out itself.
+  const ladder = [];
+  if(E1 > 0) B.forEach((b,n)=>{ ladder.push({f:beamF(L,T,E1,rho,b), axis:'L', harm:n+1, E:E1, label:'L'+(n+1)}); });
+  if(E2 > 0) B.forEach((b,n)=>{ ladder.push({f:beamF(W,T,E2,rho,b), axis:'W', harm:n+1, E:E2, label:'W'+(n+1)}); });
+  if(!ladder.length) B.forEach((b,n)=>{ ladder.push({f:beamF(L,T,31e9,rho,b), axis:'L', harm:n+1, E:31e9, label:'L'+(n+1)}); });
+  ladder.sort((a,b)=>a.f-b.f);
+  // shortcut: beam-per-axis ignores plate (Poisson) coupling and torsion; when the two
+  // dimensions are comparable it is a trend, not an absolute. Add plate theory when a
+  // wide part's modulus has to be quoted, not just compared.
+  const aspect = Math.min(L,W)/Math.max(L,W);
+  return { L,W,T,rho,E1,E2, hasMass:m>0, ladder, aspect };
 }
 function showPred(){
   const p = calcPred();
   const dens = p.hasMass ? (p.rho.toFixed(0)+' kg/m³ (weighed)') : (p.rho.toFixed(0)+' kg/m³ (ASSUMED — weigh a spring!)');
-  predEl.innerHTML =
-    'Predicted f1 <b>'+p.f[0].toFixed(0)+'</b> · f2 <b>'+p.f[1].toFixed(0)+'</b> · f3 <b>'+p.f[2].toFixed(0)+
-    '</b> · f4 <b>'+p.f[3].toFixed(0)+
-    '</b> · width f1 <b>'+p.fW.toFixed(0)+'</b> Hz &nbsp; <span class="dim">ρ '+dens+' · E from measurement: E = E_nom × (f_meas/f_pred)²</span>';
+  const top = p.ladder.slice(0,4).map(m=>'<b>'+m.f.toFixed(0)+'</b> '+m.label).join(' · ');
+  const warn = p.aspect > 0.5
+    ? ' <span class="warn">plate, not beam ('+p.aspect.toFixed(2)+' short/long) — treat as a trend, not an absolute</span>' : '';
+  predEl.innerHTML = 'Modes in frequency order: '+top+' Hz'+warn+
+    ' &nbsp; <span class="dim">ρ '+dens+' · E = E_nom × (f_meas/f_pred)²</span>';
   return p;
 }
 // canvas
@@ -236,11 +255,11 @@ function drawSpectrum(){
   ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvasW,canvasH);
   const p = calcPred();
   ctx.font = '11px monospace'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
-  p.f.forEach((f,i)=>{
-    const x = f/8000*canvasW;
+  p.ladder.slice(0,4).forEach((m,i)=>{
+    const f = m.f, x = f/8000*canvasW;
     ctx.strokeStyle = 'rgba(0,255,0,0.5)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvasH); ctx.stroke();
-    ctx.fillStyle = '#0f0'; ctx.fillText('p'+(i+1)+' '+f.toFixed(0), x+3, 2+i*13);
+    ctx.fillStyle = '#0f0'; ctx.fillText(m.label+' '+f.toFixed(0), x+3, 2+i*13);
   });
   // dB gridlines: without them a saved graph cannot show how far peaks sit above the noise
   ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 1;
@@ -265,8 +284,8 @@ function drawSpectrum(){
     // flags sit on the strongest bin inside each prediction window — the same rule the
     // table uses, so the picture and the numbers can never disagree again
     ctx.fillStyle = '#ff0'; ctx.textBaseline = 'bottom';
-    p.f.forEach(fp=>{
-      const bw = binWidth || 11.7;
+    p.ladder.slice(0,4).forEach(mm=>{
+      const fp = mm.f, bw = binWidth || 11.7;
       const lo = Math.max(3, Math.floor(fp*0.90/bw));
       const hi = Math.min(envBuf.length-4, Math.ceil(fp*1.10/bw));
       let bi = -1, best = -999;
@@ -398,19 +417,24 @@ function fitDecay(slice, freq){
   return { slope, t60: 60/Math.abs(slope), zeta, Q: 1/(2*zeta) };
 }
 function analyse(spec, taps, decaySlice){
-  const p = calcPred(), f1 = p.f[0];
-  const modeRows = [], missing = [];
+  const p = calcPred(), f1 = p.ladder[0].f;
+  const rows = [], missing = [];
   // SEARCH FOR EACH PREDICTED MODE instead of hunting local maxima. A broad hump fails
   // every peak-picking rule (no strict maximum, little local prominence) yet is obviously
   // a mode on screen — Nigel's p4. So take the strongest bin within +/-10% of each
   // prediction and only ask whether it stands clear of that window's own shoulders.
-  p.f.forEach((fp, j)=>{
+  // Six candidates, because the ladder mixes both axes and the first four may all be one
+  // family. Each mode carries its OWN modulus: E is read from the axis it was predicted on.
+  p.ladder.slice(0,6).forEach((m,idx)=>{
+    const fp = m.f;
     const lo = Math.max(3, Math.floor(fp*0.90/binWidth));
     const hi = Math.min(spec.length-4, Math.ceil(fp*1.10/binWidth));
     let bi = -1, best = -999;
     for(let i=lo;i<=hi;i++){ if(spec[i] > best){ best = spec[i]; bi = i; } }
     const shoulder = Math.min(spec[lo], spec[hi]);
-    if(bi < 0 || best < -78 || (best - shoulder) < 6){ missing.push(j+1); return; }
+    // only the four displayed modes get a “no response” note; candidates 5-6 are just
+    // backups in case the ladder is all one family
+    if(bi < 0 || best < -78 || (best - shoulder) < 6){ if(idx < 4) missing.push(m.label); return; }
     // if the window holds several local maxima, take the one NEAREST the prediction
     // among those within 3 dB of the window maximum (a side peak must not hijack the mode)
     let near = bi;
@@ -423,12 +447,20 @@ function analyse(spec, taps, decaySlice){
     let off = den > 0 ? (y3-y1)/(2*den) : 0;
     if(!isFinite(off) || Math.abs(off) > 0.5) off = 0;
     const freq = (bi+off)*binWidth;
-    modeRows.push({freq, db:y2, mode:j+1, bd:Math.abs(freq-fp), pct:100*Math.abs(freq-fp)/fp,
-                   eEst:(p.E1/1e9)*(freq/fp)*(freq/fp), isMode:true});
+    rows.push({freq, db:y2, label:m.label, bin:bi, bd:Math.abs(freq-fp), pct:100*Math.abs(freq-fp)/fp,
+               eEst:(m.E/1e9)*(freq/fp)*(freq/fp), isMode:true});
   });
+  // one peak cannot be two modes: whichever prediction it sits closest to keeps it
+  const claimed = new Map();
+  rows.forEach(r=>{
+    const c = claimed.get(r.bin);
+    if(!c){ claimed.set(r.bin, r); return; }
+    if(r.pct < c.pct){ c.dup = true; claimed.set(r.bin, r); } else r.dup = true;
+  });
+  const modeRows = rows.filter(r=>!r.dup);
   // anything prominent that is NOT inside a mode window: show up to 3, labelled for what it is
   const others = findSpringPeaks(spec, -80)
-    .filter(k=>!p.f.some(fp=>Math.abs(k.freq-fp)/fp < 0.12))
+    .filter(k=>!p.ladder.some(m=>Math.abs(k.freq-m.f)/m.f < 0.12))
     .map(k=>({freq:k.freq, db:k.db, bd:null, pct:null, isMode:false, axial:k.freq < f1*0.7}))
     .slice(0,3);
   const show = modeRows.concat(others).sort((a,b)=>a.freq-b.freq);
@@ -438,7 +470,7 @@ function analyse(spec, taps, decaySlice){
     html += '<table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
     show.forEach(r=>{
       const cls = r.pct === null ? '' : (r.pct<3 ? 'good' : (r.pct<8 ? '' : 'bad'));
-      const label = r.axial ? 'below f1' : (r.isMode ? 'p'+r.mode : '—');
+      const label = r.axial ? 'below f1' : (r.isMode ? r.label : '—');
       html += '<tr><td class="peakline">'+r.freq.toFixed(1)+'</td><td>'+r.db.toFixed(0)+'</td><td>'+label+'</td>'+
         '<td class="'+cls+'">'+(r.bd === null ? '—' : r.bd.toFixed(1))+'</td>'+
         '<td class="'+cls+'">'+(r.pct === null ? '—' : r.pct.toFixed(1))+'</td>'+
@@ -446,14 +478,14 @@ function analyse(spec, taps, decaySlice){
     });
     html += '</table>';
   }
-  if(missing.length) html += '<div class="dim">No response at p'+missing.join(', p')+
+  if(missing.length) html += '<div class="dim">No response at '+missing.join(', ')+
     ' — that mode was not excited (or the tap missed it). Nothing is hidden: an unmatched peak still shows as “—”.</div>';
   // damping: one ring-down, per mode — ζ and Q from the decay slope (no half-power bandwidth needed)
   if(decaySlice && decaySlice.length >= 8){
     const parts = [];
     modeRows.forEach(r=>{
       const d = fitDecay(decaySlice, r.freq);
-      if(d) parts.push('p'+r.mode+': T60 '+d.t60.toFixed(2)+' s · Q '+(d.Q>999?Math.round(d.Q):d.Q.toFixed(0)));
+      if(d) parts.push(r.label+': T60 '+d.t60.toFixed(2)+' s · Q '+(d.Q>999?Math.round(d.Q):d.Q.toFixed(0)));
     });
     if(parts.length) html += '<div class="dim">Damping from this single ring-down — '+parts.join(' · ')+'</div>';
   }
@@ -471,8 +503,8 @@ function analyse(spec, taps, decaySlice){
   const titleTxt = 'Session '+tapNo+' \u00b7 '+taps+' tap'+(taps===1?'':'s')+' \u00b7 '+when+' \u00b7 '+dims+
     ' \u00b7 mic '+(sampleRate/1000).toFixed(1)+'kHz FFT '+FFT_SIZE;
   const summaryTxt = 'measured / dev vs prediction / E:  ' +
-    modeRows.map(r=>'p'+r.mode+' '+r.freq.toFixed(0)+'Hz '+(r.pct>=0?'+':'')+r.pct.toFixed(1)+'% '+r.eEst.toFixed(1)+'GPa').join('  ') +
-    (missing.length ? '   no response: p'+missing.join(', p') : '');
+    modeRows.map(r=>r.label+' '+r.freq.toFixed(0)+'Hz '+(r.pct>=0?'+':'')+r.pct.toFixed(1)+'% '+r.eEst.toFixed(1)+'GPa').join('  ') +
+    (missing.length ? '   no response: '+missing.join(', ') : '');
   requestAnimationFrame(()=>{
     drawSpectrum();
     const el = document.getElementById('shot'+shotId);
