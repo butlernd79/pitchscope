@@ -45,7 +45,7 @@ td.good { color:#8f8; } td.bad { color:#f88; }
     <span id="status">Ready — press Start, then just tap the spring</span>
   </div>
   <div id="dims">
-    <label>Length mm</label><input type="number" id="inL" value="210" step="0.1">
+    <label id="lblL">Length mm</label><input type="number" id="inL" value="210" step="0.1">
     <label>Width mm</label><input type="number" id="inW" value="40" step="0.1">
     <label>Thick mm</label><input type="number" id="inT" value="4.89" step="0.01">
     <label>Mass g</label><input type="number" id="inM" value="" step="0.1">
@@ -74,7 +74,7 @@ const resultEl = document.getElementById('result');
 const inL = document.getElementById('inL'), inW = document.getElementById('inW'),
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
-      inB = document.getElementById('inB');
+      inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 // audio state (same pattern as proven tuner)
@@ -236,6 +236,8 @@ function calcPred(){
 }
 function showPred(){
   const p = calcPred();
+  // cantilever L is the FREE length: clamp face to tip, not the blank length
+  lblL.textContent = inB.value === 'cant' ? 'Free length mm (clamp→tip)' : 'Length mm';
   const dens = p.hasMass ? (p.rho.toFixed(0)+' kg/m³ (weighed)') : (p.rho.toFixed(0)+' kg/m³ (ASSUMED — weigh a spring!)');
   const top = p.ladder.slice(0,4).map(m=>'<b>'+m.f.toFixed(0)+'</b> '+m.label).join(' · ');
   // a peak cannot be assigned to two predictions that sit within a few percent
@@ -245,7 +247,9 @@ function showPred(){
     ? ' <span class="warn">'+tight+' predicted pair'+(tight>1?'s':'')+' inside 10% — those peaks cannot be assigned to one mode reliably</span>' : '';
   const warn = tightWarn + (p.aspect > 0.5
     ? ' <span class="warn">plate, not beam ('+p.aspect.toFixed(2)+' short/long) — treat as a trend, not an absolute</span>' : '');
-  predEl.innerHTML = 'Modes in frequency order: '+top+' Hz'+warn+
+  const cantNote = inB.value === 'cant'
+    ? ' &nbsp;<span class="dim">L = free length from the clamp face to the tip; a real clamp is not infinitely stiff, so expect a few % low</span>' : '';
+  predEl.innerHTML = 'Modes in frequency order: '+top+' Hz'+cantNote+warn+
     ' &nbsp; <span class="dim">ρ '+dens+' · E = E_nom × (f_meas/f_pred)²</span>';
   return p;
 }
