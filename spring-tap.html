@@ -79,7 +79,7 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.19';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.20';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -482,12 +482,16 @@ function countOnsets(tr){
   const quiet = Math.min.apply(null, s), peak = Math.max.apply(null, s);
   if(peak - quiet < 12) return [];                          // nothing standing out of the noise
   const th = quiet + 0.45*(peak - quiet);                   // half way up this session's dynamic range
-  // hysteresis, no time windows: arm above th, re-arm only after falling 6 dB back below it.
-  // Frame-rate independent, and a bounce inside one strike never re-arms.
+  // hysteresis: arm above th, re-arm only after dipping 3 dB back below it, and never count
+  // twice within 6 frames. Calibrated against a real 5-tap trace (Nigel 04/11 15:19) whose
+  // gaps bottom out only ~4 dB below the mid-range threshold — 6 dB refused to re-arm at all.
   const hits = []; let high = false;
   for(let i=0;i<s.length;i++){
-    if(!high && s[i] > th){ hits.push(i); high = true; }
-    else if(high && s[i] < th - 6){ high = false; }
+    if(!high && s[i] > th){
+      if(!hits.length || i - hits[hits.length-1] >= 6) hits.push(i);
+      high = true;
+    }
+    else if(high && s[i] < th - 3){ high = false; }
   }
   return hits;
 }
