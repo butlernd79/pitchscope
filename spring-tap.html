@@ -297,7 +297,7 @@ function drawSpectrum(){
     // flags sit on the strongest bin inside each prediction window — the same rule the
     // table uses, so the picture and the numbers can never disagree again
     ctx.fillStyle = '#ff0'; ctx.textBaseline = 'bottom';
-    p.ladder.slice(0,4).forEach(mm=>{
+    p.ladder.slice(0,6).forEach(mm=>{
       const fp = mm.f, bw = binWidth || 11.7;
       const lo = Math.max(3, Math.floor(fp*0.90/bw));
       const hi = Math.min(envBuf.length-4, Math.ceil(fp*1.10/bw));
@@ -335,7 +335,7 @@ function drawSpectrum(){
   ctx.fillText('mic '+(micLevelDb>-120 ? Math.round(micLevelDb)+'dB' : '--'), canvasW-6, 4);
 }
 // the whole analysed spectrum, so anyone can re-run the numbers without the browser
-function spectrumCSV(spec, p, taps, modeRows, missing){
+function spectrumCSV(spec, p, taps, modeRows, missing, others, axisCheck, dampParts){
   const bw = binWidth || sampleRate/FFT_SIZE;
   const D = new Date(), z = n=>String(n).padStart(2,'0');
   const L = [];
@@ -349,8 +349,14 @@ function spectrumCSV(spec, p, taps, modeRows, missing){
   L.push('# mic: sample_rate='+(sampleRate||0)+' FFT='+FFT_SIZE+' bin_hz='+bw.toFixed(4)+
          ' taps='+taps+' noise_floor_db(median)='+med.toFixed(1));
   L.push('# ladder_hz: '+p.ladder.slice(0,6).map(m=>m.label+'='+m.f.toFixed(1)).join(' '));
-  modeRows.forEach(r=>L.push('# mode: '+r.label+' '+r.freq.toFixed(2)+'Hz level='+r.db.toFixed(1)+
-         'dB dev='+r.pct.toFixed(2)+'% E='+r.eEst.toFixed(2)+'GPa'));
+  // exactly the table, row for row
+  L.push('# mode, freq_hz, level_db, dev_hz, dev_pct, e_est_gpa');
+  modeRows.forEach(r=>L.push('# '+r.label+', '+r.freq.toFixed(2)+', '+r.db.toFixed(1)+', '+
+         r.bd.toFixed(2)+', '+r.pct.toFixed(2)+', '+r.eEst.toFixed(2)));
+  others.forEach(r=>L.push('# '+(r.axial?'below_f1':'unmatched')+', '+r.freq.toFixed(2)+', '+r.db.toFixed(1)+
+         ', , , '));
+  if(axisCheck) L.push('# axis_check: '+axisCheck);
+  if(dampParts && dampParts.length) L.push('# damping: '+dampParts.join(' | '));
   if(missing.length) L.push('# no_response: '+missing.join(' '));
   L.push('# columns: freq_hz,envelope_db');
   for(let i=1;i<spec.length;i++) L.push((i*bw).toFixed(2)+','+spec[i].toFixed(2));
@@ -516,24 +522,24 @@ function analyse(spec, taps, decaySlice){
   // an axis whose modes disagree on E is telling you those peaks are not one family
   const byAxis = {};
   modeRows.forEach(r=>{ (byAxis[r.axis] = byAxis[r.axis] || []).push(r.eEst); });
-  const axLine = Object.keys(byAxis).sort().map(k=>{
+  const axisCheck = Object.keys(byAxis).sort().map(k=>{
     const es = byAxis[k];
     if(es.length < 2) return k+': '+es[0].toFixed(1)+' GPa (one mode)';
     const lo = Math.min.apply(null,es), hi = Math.max.apply(null,es), sp = 100*(hi-lo)/lo;
     return k+': '+es.map(e=>e.toFixed(1)).join(' / ')+' GPa, spread '+sp.toFixed(0)+'%'+
       (sp > 10 ? ' — INCONSISTENT, these are not all '+k+' modes' : ' — consistent');
   }).join(' · ');
-  if(axLine) html += '<div class="dim">Modulus check by axis — '+axLine+'</div>';
+  if(axisCheck) html += '<div class="dim">Modulus check by axis — '+axisCheck+'</div>';
   if(missing.length) html += '<div class="dim">No response at '+missing.join(', ')+
     ' — that mode was not excited (or the tap missed it). Nothing is hidden: an unmatched peak still shows as “—”.</div>';
   // damping: one ring-down, per mode — ζ and Q from the decay slope (no half-power bandwidth needed)
+  const dampParts = [];
   if(decaySlice && decaySlice.length >= 8){
-    const parts = [];
     modeRows.forEach(r=>{
       const d = fitDecay(decaySlice, r.freq);
-      if(d) parts.push(r.label+': T60 '+d.t60.toFixed(2)+' s · Q '+(d.Q>999?Math.round(d.Q):d.Q.toFixed(0)));
+      if(d) dampParts.push(r.label+': T60 '+d.t60.toFixed(2)+' s · Q '+(d.Q>999?Math.round(d.Q):d.Q.toFixed(0)));
     });
-    if(parts.length) html += '<div class="dim">Damping from this single ring-down — '+parts.join(' · ')+'</div>';
+    if(dampParts.length) html += '<div class="dim">Damping from this single ring-down — '+dampParts.join(' · ')+'</div>';
   }
   html += '<div class="dim">Each mode is the strongest response within ±10% of its prediction, whatever its level. E comes from frequency alone.</div>'+
     '<div class="shot" id="shot'+tapNo+'"></div></div>';
@@ -557,7 +563,7 @@ function analyse(spec, taps, decaySlice){
     if(!el) return;
     const url = exportGraph(titleTxt, summaryTxt);
     const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'');
-    const csv = spectrumCSV(spec, p, taps, modeRows, missing);
+    const csv = spectrumCSV(spec, p, taps, modeRows, missing, others, axisCheck, dampParts);
     el.innerHTML = '<a href="'+url+'" download="spring-session-'+shotId+'-'+stamp+'.png">'+
       '<img alt="session '+shotId+' spectrum" src="'+url+'"></a>'+
       '<div class="dim">Click the graph to save it as a PNG · '+
