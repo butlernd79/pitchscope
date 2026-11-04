@@ -63,7 +63,8 @@ td.good { color:#8f8; } td.bad { color:#f88; }
 const FFT_SIZE = 4096;
 const FPS = 30;
 // predictions
-const BETA = { ff:[4.7300408,7.8532046,10.9956079,14.1371655], cant:[1.8751041,4.6940911,7.8547574,10.9955407] };
+const BETA = { ff:[4.7300408,7.8532046,10.9956079,14.1371655,17.2787596,20.4203522],
+               cant:[1.8751041,4.6940911,7.8547574,10.9955407,14.1371655,17.2787596] };
 // explicit element handles (same pattern as proven tuner)
 const btnStart = document.getElementById('btnStart');
 const btnStop = document.getElementById('btnStop');
@@ -239,7 +240,7 @@ function showPred(){
   // cantilever L is the FREE length: clamp face to tip, not the blank length
   lblL.textContent = inB.value === 'cant' ? 'Free length mm (clamp→tip)' : 'Length mm';
   const dens = p.hasMass ? (p.rho.toFixed(0)+' kg/m³ (weighed)') : (p.rho.toFixed(0)+' kg/m³ (ASSUMED — weigh a spring!)');
-  const top = p.ladder.slice(0,4).map(m=>'<b>'+m.f.toFixed(0)+'</b> '+m.label).join(' · ');
+  const top = p.ladder.slice(0,6).map(m=>'<b>'+m.f.toFixed(0)+'</b> '+m.label).join(' · ');
   // a peak cannot be assigned to two predictions that sit within a few percent
   let tight = 0;
   for(let i=1;i<p.ladder.length;i++){ if(p.ladder[i].f/p.ladder[i-1].f < 1.10) tight++; }
@@ -344,8 +345,12 @@ function spectrumCSV(spec, p, taps, modeRows, missing, others, axisCheck, dampPa
   L.push('# geometry_mm: L='+inL.value+' W='+inW.value+' T='+inT.value+' mass_g='+(inM.value||'blank'));
   L.push('# assumed: E_L_GPa='+inE1.value+' E_W_GPa='+inE2.value+' ends='+inB.value);
   L.push('# rho_kgm3='+p.rho.toFixed(1)+(p.hasMass?' measured':' ASSUMED_1900'));
-  const sorted = Float32Array.from(spec).sort();
-  const med = sorted[Math.floor(sorted.length/2)];
+  // median over the band where modes actually live; including the >20 kHz roll-off
+  // drags the "floor" down by several dB and makes every margin look better than it is
+  const band = [];
+  for(let i=1;i<spec.length;i++){ const f = i*bw; if(f>=200 && f<=12000) band.push(spec[i]); }
+  band.sort((a,b)=>a-b);
+  const med = band.length ? band[Math.floor(band.length/2)] : -120;
   L.push('# mic: sample_rate='+(sampleRate||0)+' FFT='+FFT_SIZE+' bin_hz='+bw.toFixed(4)+
          ' taps='+taps+' noise_floor_db(median)='+med.toFixed(1));
   L.push('# ladder_hz: '+p.ladder.slice(0,6).map(m=>m.label+'='+m.f.toFixed(1)).join(' '));
@@ -524,12 +529,28 @@ function analyse(spec, taps, decaySlice){
   modeRows.forEach(r=>{ (byAxis[r.axis] = byAxis[r.axis] || []).push(r.eEst); });
   const axisCheck = Object.keys(byAxis).sort().map(k=>{
     const es = byAxis[k];
-    if(es.length < 2) return k+': '+es[0].toFixed(1)+' GPa (one mode)';
+    const list = es.map(e=>e.toFixed(1)).join(' / ')+' GPa';
+    if(es.length < 2) return k+': '+list+' (one mode)';
     const lo = Math.min.apply(null,es), hi = Math.max.apply(null,es), sp = 100*(hi-lo)/lo;
-    return k+': '+es.map(e=>e.toFixed(1)).join(' / ')+' GPa, spread '+sp.toFixed(0)+'%'+
-      (sp > 10 ? ' — INCONSISTENT, these are not all '+k+' modes' : ' — consistent');
+    if(sp <= 10) return k+': '+list+', spread '+sp.toFixed(0)+'% — consistent';
+    // a smooth monotonic drift with mode order is the expected thin-beam breakdown
+    // (shear and rotary inertia), NOT a mislabelled peak — only erratic jumps are a fault
+    let mono = true, maxStep = 0;
+    const dir = Math.sign(es[1]-es[0]);
+    for(let i=1;i<es.length;i++){
+      if(dir !== 0 && Math.sign(es[i]-es[i-1]) !== dir) mono = false;
+      maxStep = Math.max(maxStep, 100*Math.abs(es[i]-es[i-1])/es[i-1]);
+    }
+    if(mono && maxStep <= 6) return k+': '+list+' — consistent, drifts with mode order '+
+      '(expected: shear and rotary inertia at high order)';
+    return k+': '+list+', spread '+sp.toFixed(0)+'% — INCONSISTENT, these are not all '+k+' modes';
   }).join(' · ');
   if(axisCheck) html += '<div class="dim">Modulus check by axis — '+axisCheck+'</div>';
+  // a phone mic is rolling off and lumpy above ~15 kHz: a "mode" up there is often the
+  // microphone, not the spring, and its modulus would be fiction
+  const hf = modeRows.filter(r=>r.freq > 15000);
+  if(hf.length) html += '<div class="warn">'+hf.map(r=>r.label+' at '+r.freq.toFixed(0)+' Hz').join(', ')+
+    ' is above 15 kHz — the mic response is rolling off there, so treat it as unconfirmed, not a modulus.</div>';
   if(missing.length) html += '<div class="dim">No response at '+missing.join(', ')+
     ' — that mode was not excited (or the tap missed it). Nothing is hidden: an unmatched peak still shows as “—”.</div>';
   // damping: one ring-down, per mode — ζ and Q from the decay slope (no half-power bandwidth needed)
