@@ -675,7 +675,7 @@ function analyse(spec, taps, decaySlice){
       '. The end is not doing what you think it is: check the clamp, or change Ends. '+
       'The E values below are not valid until that is settled.</div>';
   }
-  let html = '<div id="sess'+tapNo+'"><div class="taphead">Session '+tapNo+' · '+taps+' tap'+(taps===1?'':'s')+' · max envelope</div>';
+  let html = '<div id="sess'+tapNo+'"><div class="taphead">Session '+tapNo+' · '+taps+' strike'+(taps===1?'':'s')+' · max envelope'+(taps===1?' · damping valid':'')+'</div>';
   if(show.length){
     html += '<table><tr><th>Hz</th><th>dB</th><th>Mode</th><th>ΔHz</th><th>Δ%</th><th>E est (GPa)</th></tr>';
     show.forEach(r=>{
