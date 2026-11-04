@@ -78,7 +78,7 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.14';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.15';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -361,6 +361,7 @@ function spectrumCSV(spec, p, taps, modeRows, missing, others, axisCheck, dampPa
   if(axisCheck) L.push('# axis_check: '+axisCheck);
   if(dampParts && dampParts.length) L.push('# damping: '+dampParts.join(' | '));
   if(missing.length) L.push('# no_response: '+missing.join(' '));
+  if(window.__lastTrace) L.push('# levels_db: '+window.__lastTrace.map(v=>Math.round(v)).join(' '));
   L.push('# columns: freq_hz,envelope_db');
   for(let i=1;i<spec.length;i++) L.push((i*bw).toFixed(2)+','+spec[i].toFixed(2));
   return L.join('\n');
@@ -410,6 +411,7 @@ function render(now){
       if(!session) startSession(true);      // first tap opens a 5 s session…
       else session.taps++;                  // …later taps just add to the same envelope
     }
+    if(session && session.trace.length < 400) session.trace.push(micLevelDb);
     prevLvl = micLevelDb;
     floorDb = Math.min(micLevelDb, floorDb + 0.3);
     if(floorDb < -80) floorDb = -80;                  // -80 dB is digital silence, not a floor
@@ -438,15 +440,31 @@ function startSession(firstIsTap){
   // seed from the frame the tap just landed in, otherwise the first tap of the session is lost
   const last = frames.length ? frames[frames.length-1] : null;
   envBuf = last ? Float32Array.from(last) : null;
-  session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0, startIdx: frames.length };
+  session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0, startIdx: frames.length, trace: [] };
+}
+function countOnsets(tr){
+  const s = tr.map(v=>Math.max(v,-90));            // digital silence is not a real level
+  if(s.length < 4) return 0;
+  const sorted = s.slice().sort((a,b)=>a-b), quiet = sorted[Math.floor(sorted.length*0.2)];
+  let n = 0, last = -99;
+  for(let i=3;i<s.length-1;i++){
+    if(s[i] < quiet + 10) continue;                          // not a strike
+    if(!(s[i] >= s[i-1] && s[i] > s[i+1])) continue;         // must be a local max
+    if(s[i] - Math.min.apply(null, s.slice(Math.max(0,i-8), i)) < 10) continue;  // rose out of quiet
+    if(i - last >= 3){ n++; last = i; }                      // >=3 frames apart (~100 ms)
+  }
+  return n;
 }
 function endSession(){
   if(!session) return;
-  const taps = session.taps, start = session.startIdx; session = null;
+  const live = session.taps, start = session.startIdx, trace = session.trace; session = null;
   tapArmed = true; lastTapLvl = -999;              // a finished session must not lock out the next one
+  const taps = Math.max(live, countOnsets(trace)); // trust the recorded trace over the live trigger
+  window.__lastTrace = trace;
   if(!envBuf){ statusEl.textContent = 'Nothing captured.'; return; }
   // damping only means something on ONE ring-down — pass it only for a single-tap session
   analyse(envBuf, taps, (taps === 1 && start >= 0) ? frames.slice(start, start+45) : null);
+  if(taps !== live) statusEl.textContent = 'Session saved — counted '+taps+' taps from the level trace (live trigger saw '+live+').';
 }
 function fitDecay(slice, freq){
   const bin = Math.round(freq/binWidth), pts = [];
