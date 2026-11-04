@@ -78,7 +78,7 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.9';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.10';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -103,7 +103,7 @@ let smoothBuf = null, livePeaks = [], micLevelDb = -999, micTimeBuf = null;
 let silentFrames = 0, lastLive = null;
 let tapNo = 0, session = null;               // session = {endsAt, taps}
 let lastTapAt = 0, prevLvl = -999, floorDb = -999, lastResultAt = 0;
-let envBuf = null, tapArmed = true;
+let envBuf = null, tapArmed = true, lastMarks = [];
 const SESSION_MS = 5000;                     // one session = 5 s of tapping, as many places as you like
 
 async function startAudio() {
@@ -299,19 +299,13 @@ function drawSpectrum(){
       i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
     }
     ctx.stroke();
-    // flags sit on the strongest bin inside each prediction window — the same rule the
-    // table uses, so the picture and the numbers can never disagree again
+    // flags are the frequencies the table reported — one source of truth, so the picture
+    // and the numbers cannot disagree
     ctx.fillStyle = '#ff0'; ctx.textBaseline = 'bottom';
-    p.ladder.slice(0,6).forEach(mm=>{
-      const fp = mm.f, bw = binWidth || 11.7;
-      const lo = Math.max(3, Math.floor(fp*0.90/bw));
-      const hi = Math.min(envBuf.length-4, Math.ceil(fp*1.10/bw));
-      let bi = -1, best = -999;
-      for(let i=lo;i<=hi;i++){ if(envBuf[i] > best){ best = envBuf[i]; bi = i; } }
-      if(bi < 0) return;
-      const x = (bi*bw)/8000*canvasW;
+    lastMarks.forEach(mk=>{
+      const x = mk.f/8000*canvasW;
       ctx.fillRect(x-1, canvasH-60, 2, 60);
-      ctx.fillText((bi*bw).toFixed(0), x+3, canvasH-62);
+      ctx.fillText(mk.f.toFixed(0), x+3, canvasH-62);
     });
   }
   if(smoothBuf && running){
@@ -516,6 +510,9 @@ function analyse(spec, taps, decaySlice){
   // family. Each mode carries its OWN modulus: E is read from the axis it was predicted on.
   p.ladder.slice(0,6).forEach((m,idx)=>{
     const fp = m.f;
+    // shortcut: fixed +/-10% window with the outer bins included — wide enough to catch the
+    // systematic ~10% offset a compliant clamp gives, but it can then pick the wrong peak
+    // when two sit close together. Upgrade to a joint ladder fit before trusting labels.
     const lo = Math.max(3, Math.floor(fp*0.90/binWidth));
     const hi = Math.min(spec.length-4, Math.ceil(fp*1.10/binWidth));
     let bi = -1, best = -999;
@@ -561,6 +558,7 @@ function analyse(spec, taps, decaySlice){
     .filter(k=>!rows.some(r=>Math.abs(k.freq-r.freq) < 2*binWidth))
     .map(k=>({freq:k.freq, db:k.db, bd:null, pct:null, isMode:false, axial:k.freq < f1*0.7}))
     .slice(0,3);
+  lastMarks = modeRows.map(r=>({ f:r.freq, l:r.label }));
   const show = modeRows.concat(others).sort((a,b)=>a.freq-b.freq);
   tapNo++;
   // Mode RATIOS are independent of modulus and density, so the peak set itself says which
