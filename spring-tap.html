@@ -78,7 +78,7 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.11';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.13';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -103,7 +103,7 @@ let smoothBuf = null, livePeaks = [], micLevelDb = -999, micTimeBuf = null;
 let silentFrames = 0, lastLive = null;
 let tapNo = 0, session = null;               // session = {endsAt, taps}
 let lastTapAt = 0, prevLvl = -999, floorDb = -999, lastResultAt = 0;
-let envBuf = null, tapArmed = true, lastMarks = [];
+let envBuf = null, tapArmed = true, lastMarks = [], lastTapLvl = -999;
 const SESSION_MS = 5000;                     // one session = 5 s of tapping, as many places as you like
 
 async function startAudio() {
@@ -402,18 +402,21 @@ function render(now){
     // (Floor ignores the rise; the rise test ignores the decay tail — that combination is
     // what lets several taps follow each other quickly without false triggers.)
     if(floorDb === -999) floorDb = micLevelDb;
-    if(micLevelDb < floorDb + 6) tapArmed = true;      // quiet again: re-arm for the next hit
-    if(tapArmed && micLevelDb > floorDb + 12 && micLevelDb > -55 && micLevelDb > prevLvl + 6 && now - lastTapAt > 350){
+    // shortcut: two strikes closer than ~400 ms can merge into one tap — the level must fall
+    // 12 dB below the previous strike before the next can count. Upgrade if fast tapping matters.
+    if(micLevelDb < lastTapLvl - 12) tapArmed = true;   // 12 dB below the last strike = re-armed
+    if(tapArmed && micLevelDb > floorDb + 12 && micLevelDb > prevLvl + 6 && micLevelDb > -70 && now - lastTapAt > 250){
       tapArmed = false;                                 // one strike = one tap
-      lastTapAt = now;
+      lastTapLvl = micLevelDb; lastTapAt = now;
       if(!session) startSession(true);      // first tap opens a 5 s session…
       else session.taps++;                  // …later taps just add to the same envelope
     }
     prevLvl = micLevelDb;
     floorDb = Math.min(micLevelDb, floorDb + 0.3);
+    if(floorDb < -80) floorDb = -80;                  // -80 dB is digital silence, not a floor
     if(session){
       const left = Math.max(0, (session.endsAt - now)/1000);
-      statusEl.textContent = 'Recording — '+left.toFixed(1)+' s left · '+session.taps+' tap'+(session.taps===1?'':'s')+' · tap anywhere on the spring';
+      statusEl.textContent = 'Recording — '+left.toFixed(1)+' s left · '+session.taps+' tap'+(session.taps===1?'':'s')+' · '+micLevelDb.toFixed(0)+' dB · tap the spring';
       if(left <= 0) endSession();
     }
     // loud, unmistakable proof of whether audio is actually arriving — written only on change
