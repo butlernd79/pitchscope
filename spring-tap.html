@@ -78,7 +78,7 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.10';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.11';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -553,11 +553,21 @@ function analyse(spec, taps, decaySlice){
   });
   const modeRows = rows.filter(r=>!r.dup);
   // anything prominent that is NOT inside a mode window: show up to 3, labelled for what it is
-  const others = findSpringPeaks(spec, -80)
-    .filter(k=>!p.ladder.some(m=>Math.abs(k.freq-m.f)/m.f < 0.12))
-    .filter(k=>!rows.some(r=>Math.abs(k.freq-r.freq) < 2*binWidth))
-    .map(k=>({freq:k.freq, db:k.db, bd:null, pct:null, isMode:false, axial:k.freq < f1*0.7}))
-    .slice(0,3);
+  // EVERY prominent peak, not three: a table that hides peaks is worse than no table
+  const grass = (()=>{ const b=[]; for(let i=1;i<spec.length;i++){ const f=i*binWidth; if(f>=200&&f<=12000) b.push(spec[i]); } b.sort((x,y)=>x-y); return b[Math.floor(b.length/2)]; })();
+  const others = [];
+  const topB = Math.min(spec.length-14, Math.floor(8000/binWidth));
+  for(let i=6;i<topB;i++){
+    const v = spec[i];
+    if(v <= spec[i-1] || v <= spec[i+1] || v <= spec[i-3] || v <= spec[i+3]) continue;
+    let lm=1e9, rm=1e9;
+    for(let k=1;k<=12;k++){ if(spec[i-k]<lm) lm=spec[i-k]; if(spec[i+k]<rm) rm=spec[i+k]; }
+    if(v - Math.max(lm,rm) < 6 || v < grass + 8) continue;
+    const freq = i*binWidth;
+    if(rows.some(r=>Math.abs(freq-r.freq) < 2.5*binWidth)) continue;
+    others.push({freq, db:v, bd:null, pct:null, isMode:false, axial:freq < f1*0.7});
+    if(others.length >= 12) break;
+  }
   lastMarks = modeRows.map(r=>({ f:r.freq, l:r.label }));
   const show = modeRows.concat(others).sort((a,b)=>a.freq-b.freq);
   tapNo++;
