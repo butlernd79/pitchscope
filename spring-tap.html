@@ -78,7 +78,7 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.13';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.14';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -402,9 +402,8 @@ function render(now){
     // (Floor ignores the rise; the rise test ignores the decay tail — that combination is
     // what lets several taps follow each other quickly without false triggers.)
     if(floorDb === -999) floorDb = micLevelDb;
-    // shortcut: two strikes closer than ~400 ms can merge into one tap — the level must fall
-    // 12 dB below the previous strike before the next can count. Upgrade if fast tapping matters.
-    if(micLevelDb < lastTapLvl - 12) tapArmed = true;   // 12 dB below the last strike = re-armed
+    // shortcut: two strikes closer than ~400 ms can merge; the timer below caps the re-arm wait.
+    if(micLevelDb < lastTapLvl - 12 || now - lastTapAt > 700) tapArmed = true;   // level fall, or 0.7 s
     if(tapArmed && micLevelDb > floorDb + 12 && micLevelDb > prevLvl + 6 && micLevelDb > -70 && now - lastTapAt > 250){
       tapArmed = false;                                 // one strike = one tap
       lastTapLvl = micLevelDb; lastTapAt = now;
@@ -444,6 +443,7 @@ function startSession(firstIsTap){
 function endSession(){
   if(!session) return;
   const taps = session.taps, start = session.startIdx; session = null;
+  tapArmed = true; lastTapLvl = -999;              // a finished session must not lock out the next one
   if(!envBuf){ statusEl.textContent = 'Nothing captured.'; return; }
   // damping only means something on ONE ring-down — pass it only for a single-tap session
   analyse(envBuf, taps, (taps === 1 && start >= 0) ? frames.slice(start, start+45) : null);
