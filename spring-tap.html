@@ -334,6 +334,28 @@ function drawSpectrum(){
   ctx.textAlign = 'right'; ctx.textBaseline = 'top'; ctx.fillStyle = '#555';
   ctx.fillText('mic '+(micLevelDb>-120 ? Math.round(micLevelDb)+'dB' : '--'), canvasW-6, 4);
 }
+// the whole analysed spectrum, so anyone can re-run the numbers without the browser
+function spectrumCSV(spec, p, taps, modeRows, missing){
+  const bw = binWidth || sampleRate/FFT_SIZE;
+  const D = new Date(), z = n=>String(n).padStart(2,'0');
+  const L = [];
+  L.push('# spring-tap session '+tapNo+'  '+z(D.getDate())+'/'+z(D.getMonth()+1)+'/'+D.getFullYear()+' '+
+         z(D.getHours())+':'+z(D.getMinutes())+':'+z(D.getSeconds()));
+  L.push('# geometry_mm: L='+inL.value+' W='+inW.value+' T='+inT.value+' mass_g='+(inM.value||'blank'));
+  L.push('# assumed: E_L_GPa='+inE1.value+' E_W_GPa='+inE2.value+' ends='+inB.value);
+  L.push('# rho_kgm3='+p.rho.toFixed(1)+(p.hasMass?' measured':' ASSUMED_1900'));
+  const sorted = Float32Array.from(spec).sort();
+  const med = sorted[Math.floor(sorted.length/2)];
+  L.push('# mic: sample_rate='+(sampleRate||0)+' FFT='+FFT_SIZE+' bin_hz='+bw.toFixed(4)+
+         ' taps='+taps+' noise_floor_db(median)='+med.toFixed(1));
+  L.push('# ladder_hz: '+p.ladder.slice(0,6).map(m=>m.label+'='+m.f.toFixed(1)).join(' '));
+  modeRows.forEach(r=>L.push('# mode: '+r.label+' '+r.freq.toFixed(2)+'Hz level='+r.db.toFixed(1)+
+         'dB dev='+r.pct.toFixed(2)+'% E='+r.eEst.toFixed(2)+'GPa'));
+  if(missing.length) L.push('# no_response: '+missing.join(' '));
+  L.push('# columns: freq_hz,envelope_db');
+  for(let i=1;i<spec.length;i++) L.push((i*bw).toFixed(2)+','+spec[i].toFixed(2));
+  return L.join('\n');
+}
 // a saved graph must stand alone: plot band plus header and footer text
 function exportGraph(title, summary){
   const pad = 24, LH = 14;
@@ -535,8 +557,12 @@ function analyse(spec, taps, decaySlice){
     if(!el) return;
     const url = exportGraph(titleTxt, summaryTxt);
     const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'');
+    const csv = spectrumCSV(spec, p, taps, modeRows, missing);
     el.innerHTML = '<a href="'+url+'" download="spring-session-'+shotId+'-'+stamp+'.png">'+
-      '<img alt="session '+shotId+' spectrum" src="'+url+'"></a><div class="dim">Click the graph to save it as a PNG.</div>';
+      '<img alt="session '+shotId+' spectrum" src="'+url+'"></a>'+
+      '<div class="dim">Click the graph to save it as a PNG · '+
+      '<a href="data:text/csv;charset=utf-8,'+encodeURIComponent(csv)+'" '+
+      'download="spring-session-'+shotId+'-'+stamp+'.csv">save the raw data (CSV)</a></div>';
   });
   statusEl.textContent = 'Session '+tapNo+' saved — '+modeRows.length+' mode'+(modeRows.length===1?'':'s')+
     ' found from '+taps+' tap'+(taps===1?'':'s')+'.';
