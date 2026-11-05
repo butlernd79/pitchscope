@@ -79,7 +79,7 @@ const inL = document.getElementById('inL'), inW = document.getElementById('inW')
       inT = document.getElementById('inT'), inM = document.getElementById('inM'),
       inE1 = document.getElementById('inE1'), inE2 = document.getElementById('inE2'),
       inB = document.getElementById('inB'), lblL = document.getElementById('lblL');
-const BUILD = 'v1.25';   // bump every deploy; shown on screen and written into the PNG/CSV
+const BUILD = 'v1.26';   // bump every deploy; shown on screen and written into the PNG/CSV
 if(document.getElementById('ver')) document.getElementById('ver').textContent = BUILD;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -128,9 +128,8 @@ async function startAudio() {
     analyser.maxDecibels = -10;
     hpFilter = audioCtx.createBiquadFilter();
     hpFilter.type = 'highpass'; hpFilter.frequency.value = 70;
-    source.connect(hpFilter); hpFilter.connect(analyser);
     waveAnalyser = audioCtx.createAnalyser(); waveAnalyser.fftSize = 32768;   // long contiguous window
-    hpFilter.connect(waveAnalyser);
+    source.connect(hpFilter); hpFilter.connect(waveAnalyser); waveAnalyser.connect(analyser);
     binWidth = sampleRate / FFT_SIZE;
     smoothBuf = null;
     // do NOT await resume(): it can stay pending forever and silently freeze the whole start path
@@ -411,6 +410,7 @@ function drawWave(cv, wave, sr){
   const raw = (wave && wave[0]) ? wave[0] : null;
   if(!raw || !raw.length){ g.fillText('waveform · nothing captured', 4, 3); return; }
   let peak = 0; for(let i=0;i<raw.length;i++){ const v=Math.abs(raw[i]); if(v>peak) peak=v; }
+  if(peak < 1e-5){ g.fillStyle = '#f90'; g.fillText('waveform · captured silence ('+raw.length+' samples)', 4, 3); return; }
   // start the window at the impact, so the decay is what you see, not the silence before it
   let st = 0; for(let i=0;i<raw.length;i++){ if(Math.abs(raw[i]) > peak*0.2){ st = i; break; } }
   // 120 ms is the sweet spot: enough cycles at 474 Hz (about 57) to see the waveform, short
@@ -478,12 +478,21 @@ function render(now){
       else session.taps++;                  // …later taps just add to the same envelope
     }
     if(session && session.trace.length < 400) session.trace.push(micLevelDb);
-    if(session && session.grab > 0){
-      session.grab--;
-      if(session.grab === 0 && waveAnalyser){
-        const wb = new Float32Array(waveAnalyser.fftSize);
-        waveAnalyser.getFloatTimeDomainData(wb);   // ~0.27 s after the strike: impact stays inside the window
-        session.wave.push(wb);
+    // grab the waveform once the impact is inside the window, and keep retrying until the
+    // buffer actually contains signal — one silent capture left the strip blank.
+    if(session){
+      session.n = (session.n || 0) + 1;
+      if(!session.wave.length && session.n >= 8){
+        let got = null;
+        if(waveAnalyser){
+          const wb = new Float32Array(waveAnalyser.fftSize);
+          waveAnalyser.getFloatTimeDomainData(wb);
+          let pk = 0;
+          for(let i=0;i<wb.length;i+=16){ const v = Math.abs(wb[i]); if(v > pk) pk = v; }
+          if(pk > 1e-4) got = wb;
+        }
+        if(!got && micTimeBuf) got = Float32Array.from(micTimeBuf);   // fall back to the level buffer
+        if(got) session.wave.push(got);
       }
     }
     prevLvl = micLevelDb;
@@ -514,7 +523,7 @@ function startSession(firstIsTap){
   // seed from the frame the tap just landed in, otherwise the first tap of the session is lost
   const last = frames.length ? frames[frames.length-1] : null;
   envBuf = last ? Float32Array.from(last) : null;
-  session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0, startIdx: frames.length, trace: [], wave: [], grab: 8 };
+  session = { endsAt: performance.now() + SESSION_MS, taps: firstIsTap ? 1 : 0, startIdx: frames.length, trace: [], wave: [], n: 0 };
 }
 function countOnsets(tr){
   const s = tr.map(v=>Math.min(0, Math.max(-90, v)));        // digital silence is not a level
